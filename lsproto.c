@@ -52,7 +52,7 @@ lnewproto(lua_State *L) {
 
 static int
 ldeleteproto(lua_State *L) {
-	struct sproto * sp = lua_touserdata(L,1);
+	struct sproto * sp = (struct sproto *)lua_touserdata(L,1);
 	if (sp == NULL) {
 		return luaL_argerror(L, 1, "Need a sproto object");
 	}
@@ -62,18 +62,18 @@ ldeleteproto(lua_State *L) {
 
 static int
 lquerytype(lua_State *L) {
-	struct sproto *sp = lua_touserdata(L,1);
+	struct sproto *sp = (struct sproto *)lua_touserdata(L,1);
 	if (sp == NULL) {
 		return luaL_argerror(L, 1, "Need a sproto object");
 	}
-	const char * typename = luaL_checkstring(L,2);
-	struct sproto_type *st = sproto_type(sp, typename);
+	const char * type_name = luaL_checkstring(L,2);
+	struct sproto_type *st = get_sproto_type(sp, type_name);
 	if (st) {
 		lua_pushlightuserdata(L, st);
 		return 1;
 	}
 
-	return luaL_error(L, "type %s not found", typename);
+	return luaL_error(L, "type %s not found", type_name);
 }
 
 struct encode_ud {
@@ -87,7 +87,7 @@ struct encode_ud {
 
 static int 
 encode(void *ud, const char *tagname, int type, int index, struct sproto_type *st, void *value, int length) {
-	struct encode_ud *self = ud;
+	struct encode_ud *self =(encode_ud *)ud;
 	lua_State *L = self->L;
 	if (self->deep >= ENCODE_DEEPLEVEL)
 		return luaL_error(L, "The table is too deep");
@@ -191,7 +191,7 @@ lencode(lua_State *L) {
 	void * buffer = lua_touserdata(L, lua_upvalueindex(1));
 	int sz = lua_tointeger(L, lua_upvalueindex(2));
 
-	struct sproto_type * st = lua_touserdata(L, 1);
+	struct sproto_type * st = (struct sproto_type *)lua_touserdata(L, 1);
 	if (st == NULL) {
 		return luaL_argerror(L, 1, "Need a sproto_type object");
 	}
@@ -210,7 +210,7 @@ lencode(lua_State *L) {
 			buffer = expand_buffer(L, sz, sz*2);
 			sz *= 2;
 		} else {
-			lua_pushlstring(L, buffer, r);
+			lua_pushlstring(L, (const char *)buffer, r);
 			return 1;
 		}
 	}
@@ -226,7 +226,7 @@ struct decode_ud {
 
 static int 
 decode(void *ud, const char *tagname, int type, int index, struct sproto_type *st, void *value, int length) {
-	struct decode_ud * self = ud;
+	struct decode_ud * self = (struct decode_ud *)ud;
 	lua_State *L = self->L;
 	if (self->deep >= ENCODE_DEEPLEVEL)
 		return luaL_error(L, "The table is too deep");
@@ -257,7 +257,7 @@ decode(void *ud, const char *tagname, int type, int index, struct sproto_type *s
 		break;
 	}
 	case SPROTO_TSTRING: {
-		lua_pushlstring(L, value, length);
+		lua_pushlstring(L, (const char *)value, length);
 		break;
 	}
 	case SPROTO_TSTRUCT: {
@@ -311,7 +311,7 @@ getbuffer(lua_State *L, int index, size_t *sz) {
  */
 static int
 ldecode(lua_State *L) {
-	struct sproto_type * st = lua_touserdata(L, 1);
+	struct sproto_type * st = (struct sproto_type *)lua_touserdata(L, 1);
 	if (st == NULL) {
 		return luaL_argerror(L, 1, "Need a sproto_type object");
 	}
@@ -338,7 +338,7 @@ ldecode(lua_State *L) {
 
 static int
 ldumpproto(lua_State *L) {
-	struct sproto * sp = lua_touserdata(L, 1);
+	struct sproto * sp = (struct sproto *)lua_touserdata(L, 1);
 	if (sp == NULL) {
 		return luaL_argerror(L, 1, "Need a sproto_type object");
 	}
@@ -367,7 +367,7 @@ lpack(lua_State *L) {
 	if (bytes > maxsz) {
 		return luaL_error(L, "packing error, return size = %d", bytes);
 	}
-	lua_pushlstring(L, output, bytes);
+	lua_pushlstring(L, (const char *)output, bytes);
 
 	return 1;
 }
@@ -387,7 +387,7 @@ lunpack(lua_State *L) {
 	r = sproto_unpack(buffer, sz, output, r);
 	if (r < 0)
 		return luaL_error(L, "Invalid unpack stream");
-	lua_pushlstring(L, output, r);
+	lua_pushlstring(L, (const char *)output, r);
 	return 1;
 }
 
@@ -401,7 +401,7 @@ pushfunction_withbuffer(lua_State *L, const char * name, lua_CFunction func) {
 
 static int
 lprotocol(lua_State *L) {
-	struct sproto * sp = lua_touserdata(L, 1);
+	struct sproto * sp = (struct sproto *)lua_touserdata(L, 1);
 	if (sp == NULL) {
 		return luaL_argerror(L, 1, "Need a sproto_type object");
 	}
