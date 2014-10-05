@@ -435,7 +435,17 @@ lprotocol(lua_State *L) {
 	return 3;
 }
 
-int
+#ifdef _MSC_VER
+#define SPROTO_API __declspec(dllexport)
+#else
+#define SPROTO_API __declspec(dllexport)
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+SPROTO_API int
 luaopen_sproto_core(lua_State *L) {
 #ifdef luaL_checkversion
 	luaL_checkversion(L);
@@ -455,3 +465,7 @@ luaopen_sproto_core(lua_State *L) {
 	pushfunction_withbuffer(L, "unpack", lunpack);
 	return 1;
 }
+
+#ifdef __cplusplus
+}
+#endif

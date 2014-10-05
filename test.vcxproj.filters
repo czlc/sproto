@@ -2,11 +2,5 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="main.c" />
-    <ClCompile Include="lsproto.c" />
-    <ClCompile Include="sproto.c" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="msvcint.h" />
-    <ClInclude Include="sproto.h" />
   </ItemGroup>
 </Project>

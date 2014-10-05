@@ -47,7 +47,6 @@ local ab = {
 collectgarbage "stop"
 
 local encode_time , decode_time = ...
-
 encode_time = assert(tonumber(encode_time))
 decode_time = assert(tonumber(decode_time))
 
