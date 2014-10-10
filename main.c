@@ -14,21 +14,15 @@ _panic(lua_State *L) {
 
 int main(int argn, char **argv)
 {
-	if (argn != 4)
+	if (argn != 2)
 		return -1;
 
 	lua_State *L = luaL_newstate();
 	lua_atpanic(L, _panic);
 	luaL_openlibs(L);
-	if (luaL_loadfile(L, argv[1]) != 0) {
+	if (luaL_dofile(L, argv[1]) != 0) {
 		_panic(L);
 	}
-	lua_pushinteger(L, atoi(argv[2]));
-	lua_pushinteger(L, atoi(argv[3]));
-	if (lua_pcall(L, 2, LUA_MULTRET, 0) != 0) {
-		_panic(L);
-	}
-
 	system("pause");
 	return 0;
 }

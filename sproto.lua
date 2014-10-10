@@ -22,17 +22,21 @@ function sproto.new(pbin)
 	return setmetatable(self, sproto_mt)
 end
 
+-- 解析协议包字符串并生成协议组对象
+-- 拥有功能：encode,decode,pencode, pdecode
 function sproto.parse(ptext)
 	local parser = require "sprotoparser"
 	local pbin = parser.parse(ptext)
 	return sproto.new(pbin)
 end
 
+-- 创建协议处理器
+-- 拥有attach，dispatch功能
 function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
-		__proto = self,
-		__package = core.querytype(self.__cobj, packagename),
+		__proto = self, -- 协议组对象
+		__package = core.querytype(self.__cobj, packagename), -- 缓存package类型
 		__session = {},
 	}
 	return setmetatable(obj, host_mt)
@@ -93,7 +97,7 @@ local header_tmp = {}
 
 local function gen_response(self, response, session)
 	return function(args)
-		header_tmp.type = nil
+		header_tmp.type = nil -- type为0表示是response
 		header_tmp.session = session
 		local header = core.encode(self.__package, header_tmp)
 		if response then
@@ -105,18 +109,19 @@ local function gen_response(self, response, session)
 	end
 end
 
+-- 处理收到的协议
 function host:dispatch(...)
-	local bin = core.unpack(...)
+	local bin = core.unpack(...)	-- 解包协议
 	header_tmp.type = nil
 	header_tmp.session = nil
-	local header, size = core.decode(self.__package, bin, header_tmp)
+	local header, size = core.decode(self.__package, bin, header_tmp) -- 解码协议头
 	local content = bin:sub(size + 1)
 	if header.type then
 		-- request
-		local proto = queryproto(self.__proto, header.type)
+		local proto = queryproto(self.__proto, header.type) -- 获得协议对象
 		local result
 		if proto.request then
-			result = core.decode(proto.request, content)
+			result = core.decode(proto.request, content) -- 解码协议内容
 		end
 		if header_tmp.session then
 			return "REQUEST", proto.name, result, gen_response(self, proto.response, header_tmp.session)
@@ -137,9 +142,11 @@ function host:dispatch(...)
 	end
 end
 
+-- 创建协议发生器，sp是对方的协议组对象
 function host:attach(sp)
+	-- name 是协议名
 	return function(name, args, session)
-		local proto = queryproto(sp, name)
+		local proto = queryproto(sp, name)	-- 获得协议对象
 		header_tmp.type = proto.tag
 		header_tmp.session = session
 		local header = core.encode(self.__package, header_tmp)
@@ -149,8 +156,8 @@ function host:attach(sp)
 		end
 
 		if args then
-			local content = core.encode(proto.request, args)
-			return core.pack(header ..  content)
+			local content = core.encode(proto.request, args) -- 编码协议内容
+			return core.pack(header ..  content) -- 打包整个协议数据
 		else
 			return core.pack(header)
 		end
