@@ -12,7 +12,7 @@ struct sproto_type;
 #define SPROTO_TINTEGER 0
 #define SPROTO_TBOOLEAN 1
 #define SPROTO_TSTRING 2
-#define SPROTO_TSTRUCT 3
+#define SPROTO_TSTRUCT 3	// 自定义类型
 
 struct sproto * sproto_create(const void * proto, size_t sz);
 void sproto_release(struct sproto *);

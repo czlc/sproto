@@ -1,6 +1,7 @@
 local lpeg = require "lpeg"
 local bit32 = require "bit32"
 local table = require "table"
+local printr = require "print_r"
 
 local P = lpeg.P
 local S = lpeg.S
@@ -24,23 +25,32 @@ local exception = lpeg.Cmt( lpeg.Carg(1) , function ( _ , pos, parser_state)
 	return pos
 end)
 
-local eof = P(-1)
-local newline = lpeg.Cmt((P"\n" + "\r\n") * lpeg.Carg(1) ,count_lines)
-local line_comment = "#" * (1 - newline) ^0 * (newline + eof)
-local blank = S" \t" + newline + line_comment
-local blank0 = blank ^ 0
-local blanks = blank ^ 1
+local eof = P(-1)	-- 匹配字符串结尾
+local newline = lpeg.Cmt((P"\n" + "\r\n") * lpeg.Carg(1) ,count_lines)	-- 匹配换行，并进行行统计
+local line_comment = "#" * (1 - newline) ^0 * (newline + eof)	-- 匹配行注释
+local blank = S" \t" + newline + line_comment	-- 匹配 空格 or tab or 换行 or 行注释
+local blank0 = blank ^ 0	-- 匹配0或者多个空
+local blanks = blank ^ 1	-- 匹配1或者多个空
 local alpha = R"az" + R"AZ" + "_"
 local alnum = alpha + R"09"
-local word = alpha * alnum ^ 0
-local name = C(word)
-local typename = C(word * ("." * word) ^ 0)
-local tag = R"09" ^ 1 / tonumber
+local word = alpha * alnum ^ 0	-- 匹配合法命名
+local name = C(word) -- 取得合法命名
+local typename = C(word * ("." * word) ^ 0) -- 取得类型名
+local tag = R"09" ^ 1 / tonumber -- 取得tonumber(tag)
 
+-- 匹配多个pattern
 local function multipat(pat)
+	-- 是否应该是return Ct(blank0 * (pat + blanks) ^ 0 * pat^0 * blank0)?
 	return Ct(blank0 * (pat * blanks) ^ 0 * pat^0 * blank0)
 end
 
+-- 命名pattern
+-- {
+--		type = name,
+--		[1] = xxx,
+--		[2] = xxx,
+--		...
+-- }
 local function namedpat(name, pat)
 	return Ct(Cg(Cc(name), "type") * Cg(pat))
 end
@@ -52,7 +62,7 @@ local typedef = P {
 	TYPE = namedpat("type", P"." * name * blank0 * V"STRUCT" ),
 	SUBPROTO = Ct((C"request" + C"response") * blanks * (name + V"STRUCT")),
 	PROTOCOL = namedpat("protocol", name * blanks * tag * blank0 * P"{" * multipat(V"SUBPROTO") * P"}"),
-	ALL = multipat(V"TYPE" + V"PROTOCOL"),
+	ALL = multipat(V"TYPE" + V"PROTOCOL"),	-- 或者是[TYPE]或者是[PROTOCOL]
 }
 
 local proto = blank0 * typedef * blank0
@@ -116,7 +126,7 @@ local function adjust(r)
 
 	for _, obj in ipairs(r) do
 		local set = result[obj.type]
-		local name = obj[1]
+		local name = obj[1]	-- obj[1]是用户定义名，比如"Person"、"AddressBook"
 		assert(set[name] == nil , "redefined " .. name)
 		set[name] = convert[obj.type](result,obj)
 	end
@@ -130,6 +140,7 @@ local buildin_types = {
 	string = 2,
 }
 
+-- ptype = parent type
 local function checktype(types, ptype, t)
 	if buildin_types[t] then
 		return t
@@ -164,7 +175,9 @@ end
 
 local function parser(text,filename)
 	local state = { file = filename, pos = 0, line = 1 }
-	local r = lpeg.match(proto * -1 + exception , text , 1, state )
+	-- 匹配proto，-1表示匹配整个字符串
+	-- +exception表示如果不匹配就输出错误
+	local r = lpeg.match(proto * -1 + exception , text , 1, state ) -- state是传递给lpeg的第一个额外参数，可以通过lpeg.Carg(1)取到
 	return flattypename(adjust(r))
 end
 
@@ -195,6 +208,7 @@ end
 }
 ]]
 
+-- 打包字符串，即在字符串之前加上长度
 local function packbytes(str)
 	local size = #str
 	return string.char(bit32.extract(size,0,8))..
@@ -205,25 +219,36 @@ local function packbytes(str)
 end
 
 local function packvalue(id)
-	id = (id + 1) * 2
+	id = (id + 1) * 2	-- 使得正常value均是偶数，若解包的时候发现value是奇数的话，说明这是个filed是nil或者是其它情况。则把当前 tag 加上 (v-1)/2 + 1 ，并继续处理下一个字段值
 	assert(id >=0 and id < 65536)
 	return string.char(bit32.extract(id, 0, 8)) .. string.char(bit32.extract(id, 8, 8))
 end
 
+
+--[[
+	f = {
+		["name"] = "person",
+		["buildin"] = nil
+		["type"]  = 2,
+		["tag"] = 0,
+		["array"] = true,
+	}
+]]
+-- 打包一个自定义类型下的一个field
 local function packfield(f)
 	local strtbl = {}
 	if f.array then
-		table.insert(strtbl, "\5\0")  -- 5 fields
+		table.insert(strtbl, "\5\0")  -- 5 fields，用一个word来表示fn
 	else
 		table.insert(strtbl, "\4\0")	-- 4 fields
 	end
 	table.insert(strtbl, "\0\0")	-- name	(tag = 0, ref =0)
 	if f.buildin then
 		table.insert(strtbl, packvalue(f.buildin))	-- buildin (tag = 1)
-		table.insert(strtbl, "\1\0")	-- skip (tag = 2)
+		table.insert(strtbl, "\1\0")	-- skip (tag = 2) 是buildin类型，则忽略type值
 		table.insert(strtbl, packvalue(f.tag))		-- tag (tag = 3)
 	else
-		table.insert(strtbl, "\1\0")	-- skip (tag = 1)
+		table.insert(strtbl, "\1\0")	-- skip (tag = 1) 非buildin类型，忽略buildin值
 		table.insert(strtbl, packvalue(f.type))		-- type (tag = 2)
 		table.insert(strtbl, packvalue(f.tag))		-- tag (tag = 3)
 	end
@@ -234,10 +259,25 @@ local function packfield(f)
 	return packbytes(table.concat(strtbl))
 end
 
+--[[
+t = {
+        [1] = {
+                ["typename"] = "string",
+                ["tag"] = 0,
+                ["name"] = "number",
+        },
+        [2] = {
+                ["typename"] = "integer",
+                ["tag"] = 1,
+                ["name"] = "type",
+        },
+}
+]]
+-- 打包一个自定义类型
 local function packtype(name, t, alltypes)
 	local fields = {}
 	local tmp = {}
-	for _, f in ipairs(t) do
+	for _, f in ipairs(t) do	-- 遍历filed
 		tmp.array = f.array
 		tmp.name = f.name
 		tmp.tag = f.tag
@@ -251,7 +291,7 @@ local function packtype(name, t, alltypes)
 		table.insert(fields, packfield(tmp))
 	end
 	local data
-	if #fields == 0 then
+	if #fields == 0 then	-- 自定义类型中没有fields
 		data = {
 			"\1\0",	-- 1 fields
 			"\0\0",	-- name	(id = 0, ref = 0)
@@ -261,7 +301,7 @@ local function packtype(name, t, alltypes)
 		data = {
 			"\2\0",	-- 2 fields
 			"\0\0",	-- name	(tag = 0, ref = 0)
-			"\0\0", -- field[]	(tag = 1, ref = 1)
+			"\0\0", -- field[]	(tag = 1, ref = 1) tag和ref都是存的(diff-1)
 			packbytes(name),
 			packbytes(table.concat(fields)),
 		}
@@ -270,6 +310,15 @@ local function packtype(name, t, alltypes)
 	return packbytes(table.concat(data))
 end
 
+--[[
+p =	{
+		["name"] = "blackhole",
+        ["tag"] = 4,
+        ["request"] = "blackhole.request",
+		["response"] = "blackhole.response",
+	}
+]]
+-- 打包一个协议
 local function packproto(name, p, alltypes)
 --	if p.request == nil then
 --		error(string.format("Protocol %s need request", name))
@@ -281,12 +330,12 @@ local function packproto(name, p, alltypes)
 		end
 	end
 	local tmp = {
-		"\4\0",	-- 4 fields
+		"\4\0",	-- 4 fields:name, tag,  request, response
 		"\0\0",	-- name (id=0, ref=0)
 		packvalue(p.tag),	-- tag (tag=1)
 	}
 	if p.request == nil and p.response == nil then
-		tmp[1] = "\2\0"
+		tmp[1] = "\2\0" -- name, tag
 	else
 		if p.request then
 			table.insert(tmp, packvalue(alltypes[p.request])) -- request typename (tag=2)
@@ -294,9 +343,9 @@ local function packproto(name, p, alltypes)
 			table.insert(tmp, "\1\0")
 		end
 		if p.response then
-			table.insert(tmp, packvalue(alltypes[p.response])) -- request typename (tag=3)
+			table.insert(tmp, packvalue(alltypes[p.response])) -- response typename (tag=3)
 		else
-			tmp[1] = "\3\0"
+			tmp[1] = "\3\0" -- name, tag, request
 		end
 	end
 
@@ -305,6 +354,7 @@ local function packproto(name, p, alltypes)
 	return packbytes(table.concat(tmp))
 end
 
+-- 打包type和protocol
 local function packgroup(t,p)
 	if next(t) == nil then
 		assert(next(p) == nil)
@@ -316,11 +366,12 @@ local function packgroup(t,p)
 		alltypes[name] = #alltypes
 		table.insert(alltypes, name)
 	end
+
 	tt = {}
 	for _,name in ipairs(alltypes) do
 		table.insert(tt, packtype(name, t[name], alltypes))
 	end
-	tt = packbytes(table.concat(tt))
+	tt = packbytes(table.concat(tt)) -- tt是所有自定义类型的描述打包，包括每个自定义类型下的每个field
 	if next(p) then
 		local tmp = {}
 		for name, tbl in pairs(p) do
@@ -378,6 +429,7 @@ function sparser.dump(str)
 	print(tmp)
 end
 
+-- 解析类型组、协议组，并将解析结果打包成字符串格式
 function sparser.parse(text, name)
 	local r = parser(text, name or "=text")
 	local data = encodeall(r)

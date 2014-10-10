@@ -21,8 +21,8 @@ struct field {
 
 struct sproto_type {
 	const char * name;
-	int n;
-	int base;
+	int n;	// filed count
+	int base; // 起始tag
 	int maxn;
 	struct field *f;
 };
@@ -30,7 +30,7 @@ struct sproto_type {
 struct protocol {
 	const char *name;
 	int tag;
-	struct sproto_type * p[2];
+	struct sproto_type * p[2];	// request和response
 };
 
 struct chunk {
@@ -44,11 +44,11 @@ struct pool {
 };
 
 struct sproto {
-	struct pool memory;
-	int type_n;
-	int protocol_n;
-	struct sproto_type * type;
-	struct protocol * proto;
+	struct pool memory;				// 内存池
+	int type_n;						// type count
+	int protocol_n;					// protocol count
+	struct sproto_type * type;		// type 数组
+	struct protocol * proto;		// protocol 数组
 };
 
 static void
@@ -68,6 +68,7 @@ pool_release(struct pool *p) {
 	}
 }
 
+// 创建一个sz大小的chunk，并将其放到链表头部
 static void *
 pool_newchunk(struct pool *p, size_t sz) {
 	struct chunk * t = (struct chunk *)malloc(sz + sizeof(struct chunk));
@@ -78,27 +79,33 @@ pool_newchunk(struct pool *p, size_t sz) {
 	return t+1;
 }
 
+// 根据sz创建一内存块，内存块必须是8字节对齐
 static void *
 pool_alloc(struct pool *p, size_t sz) {
 	// align by 8
 	sz = (sz + 7) & ~7;
 	if (sz > CHUNK_SIZE) {
+		// 需要分配的大小超过默认CHUNK_SIZE，则按所需分配
 		return pool_newchunk(p, sz);
 	}
 	if (p->current == NULL) {
+		// 如果当前没有可用内存，则新开辟一块默认大小CHUNK_SIZE的内存块
 		if (pool_newchunk(p, CHUNK_SIZE) == NULL)
 			return NULL;
 		p->current = p->header;
 	}
 	if (sz + p->current_used <= CHUNK_SIZE) {
+		// 如果所剩的内存够用了，就直接用
 		void * ret = (char *)(p->current+1) + p->current_used;
 		p->current_used += sz;
 		return ret;
 	}
-
+	// 当前chunk所剩内存不够用了
 	if (sz > p->current_used) {
+		// 所需的内存大于本Chunk已经使用过的内存，说明需求的内存超过CHUNK_SIZE/2，按其需要的量分配一块
 		return pool_newchunk(p, sz);
 	} else {
+		// 分配一块CHUNK_SIZE内存
 		void * ret = pool_newchunk(p, CHUNK_SIZE);
 		p->current = p->header;
 		p->current_used = sz;
@@ -116,6 +123,15 @@ todword(const uint8_t *p) {
 	return p[0] | p[1]<<8 | p[2]<<16 | p[3]<<24;
 }
 
+// 作用：
+//		计算锯齿数组元素个数
+//
+// 格式：
+//		2Byte			: 数组总长度
+//		2Byte + nByte	: Item[0].Length + Item[0].Data
+//		2Byte + nByte	: Item[1].Length + Item[1].Data
+//		...
+//		2Byte + nByte	: Item[n].Length + Item[n].Data
 static int
 count_array(const uint8_t * stream) {
 	uint32_t length = todword(stream);
@@ -137,6 +153,19 @@ count_array(const uint8_t * stream) {
 	return n;
 }
 
+// 作用：
+//	解析fields结构，验证结构正确性，并返回这个结构的field个数
+//
+// 参数：
+//  stream/sz：结构数据
+//
+// fields结构格式：
+//	2Byte		: 结构所包含field个数fn
+//  2Byte*fn	: 包含每个field的值，若值为0表示值是存在fields之后的附加数据中
+//  2Byte+nByte	: 附加数据1
+//  2Byte+nByte	: 附加数据2
+//	...
+//  2Byte+nByte	: 附加数据n
 static int
 struct_field(const uint8_t * stream, size_t sz) {
 	const uint8_t * field;
@@ -153,11 +182,13 @@ struct_field(const uint8_t * stream, size_t sz) {
 	for (i=0;i<fn;i++) {
 		int value= toword(field + i * SIZEOF_FIELD + SIZEOF_HEADER);
 		uint32_t dsz;
-		if (value != 0)
+		if (value != 0)	// 数据存在field处，不关心
 			continue;
+
+		// 每块数据都是：数据长度+数据
 		if (sz < SIZEOF_LENGTH)
 			return -1;
-		dsz = todword(stream);
+		dsz = todword(stream);	// 数据长度
 		if (sz < SIZEOF_LENGTH + dsz)
 			return -1;
 		stream += SIZEOF_LENGTH + dsz;
@@ -169,13 +200,20 @@ struct_field(const uint8_t * stream, size_t sz) {
 
 static const char *
 import_string(struct sproto *s, const uint8_t * stream) {
-	uint32_t sz = todword(stream);
+	uint32_t sz = todword(stream);	// string 长度
 	char * buffer = (char *)pool_alloc(&s->memory, sz+1);
 	memcpy(buffer, stream+SIZEOF_LENGTH, sz);
 	buffer[sz] = '\0';
 	return buffer;
 }
 
+// 作用：
+//		导入一个field的数据到field结构中
+//
+// field格式：
+//		2Byte			:fields数据总长度
+//		2Byte			:type field count value
+//		2Byte			:name value
 static const uint8_t *
 import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 	uint32_t sz;
@@ -199,7 +237,7 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 		int value;
 		++tag;
 		value = toword(stream + SIZEOF_FIELD * i);
-		if (value & 1) {
+		if (value & 1) { // 奇数跳过
 			tag+= value/2;
 			continue;
 		}
@@ -209,9 +247,9 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 			f->name = import_string(s, stream + fn * SIZEOF_FIELD);
 			continue;
 		}
-		if (value == 0)
+		if (value == 0) // 数据在后
 			return NULL;
-		value = value/2 - 1;
+		value = value/2 - 1; // 值
 		switch(tag) {
 		case 1:	// buildin
 			if (value >= SPROTO_TSTRUCT)
@@ -257,14 +295,30 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 	fields 1 : *field
 }
 */
+// 作用：
+//		导入一个type数据stream到sproto_type
+//
+// 参数：
+//		t:待填充结构
+//
+// type格式：
+//		2Byte			:type数据总长度
+//		2Byte			:name value = 0
+//		2Byte			:field value = 0
+//		nByte			:name data
+//		nByte			:field 0
+//		nByte			:field 1
+//		nByte			:field n
+// 返回：
+//		下一个type数据
 static const uint8_t *
 import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 	uint32_t sz = todword(stream);
 	int i;
 	stream += SIZEOF_LENGTH;
-	const uint8_t * result = stream + sz;
+	const uint8_t * result = stream + sz; // result指向下一个type数据
 	int fn = struct_field(stream, sz);
-	if (fn <= 0 || fn > 2)
+	if (fn <= 0 || fn > 2)	// type 最多只有2个filed：name和field数组，且他们value都为0，而指向后续数据
 		return NULL;
 	for (i=0;i<fn*SIZEOF_FIELD;i+=SIZEOF_FIELD) {
 		// name and fields must encode to 0
@@ -273,16 +327,16 @@ import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 			return NULL;
 	}
 	memset(t, 0, sizeof(*t));
-	stream += SIZEOF_HEADER + fn * SIZEOF_FIELD;
-	t->name = import_string(s, stream);
+	stream += SIZEOF_HEADER + fn * SIZEOF_FIELD;	// first data
+	t->name = import_string(s, stream);	// 导入name
 	if (fn == 1) {
 		return result;
 	}
 	stream += todword(stream)+SIZEOF_LENGTH;	// second data
-	int n = count_array(stream);
+	int n = count_array(stream);	// n个field
 	if (n<0)
 		return NULL;
-	stream += SIZEOF_LENGTH;
+	stream += SIZEOF_LENGTH;	// stream 指向第一个field数据
 	int maxn = n;
 	int last = -1;
 	t->n = n;
@@ -296,13 +350,13 @@ import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 		if (tag < last)
 			return NULL;	// tag must in ascending order
 		if (tag > last+1) {
-			++maxn;
+			++maxn;	// 如果tag之间有空缺，那么会填补一个skip tag用于跳到下个tag，这个填补的tag也会占用field
 		}
 		last = tag;
 	}
 	t->maxn = maxn;
 	t->base = t->f[0].tag;
-	n = t->f[n-1].tag - t->base + 1;
+	n = t->f[n-1].tag - t->base + 1; // 如果tag差值和n不匹配，说明不是连续的tag
 	if (n != t->n) {
 		t->base = -1;
 	}
@@ -317,6 +371,20 @@ import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 	response 3 : integer
 }
 */
+// 作用：
+//		导入一个protocol数据stream到protocol
+//
+// 参数：
+//		p:待填充结构
+//
+// protocol格式：
+//		2Byte			:prtocol数据总长度
+//		2Byte			:field count 4，分别是name, tag,  request, response
+//		2Byte			:name value 0
+//		2Byte			:协议tag
+//		2Byte			:request type value
+//		2Byte			:response type value
+//		nByte			:name data
 static const uint8_t *
 import_protocol(struct sproto *s, struct protocol *p, const uint8_t * stream) {
 	uint32_t sz = todword(stream);
@@ -332,7 +400,7 @@ import_protocol(struct sproto *s, struct protocol *p, const uint8_t * stream) {
 	int tag = 0;
 	for (i=0;i<fn;i++,tag++) {
 		int value = toword(stream + SIZEOF_FIELD * i);
-		if (value & 1) {
+		if (value & 1) { // 奇数值忽略
 			tag += (value-1)/2;
 			continue;
 		}
@@ -380,15 +448,16 @@ create_from_bundle(struct sproto *s, const uint8_t * stream, size_t sz) {
 
 	stream += SIZEOF_HEADER;
 
-	const uint8_t * content = stream + fn*SIZEOF_FIELD;
+	const uint8_t * content = stream + fn*SIZEOF_FIELD;	// content指向数据段
 	const uint8_t * typedata = NULL;
 	const uint8_t * protocoldata = NULL;
 
 	int i;
 	for (i=0;i<fn;i++) {
-		int value = toword(stream + i*SIZEOF_FIELD);
-		if (value != 0)
+		int value = toword(stream + i*SIZEOF_FIELD);	// field value
+		if (value != 0)	// 对于type array和protocol array的数据都存在field之后，所以此处必0
 			return NULL;
+
 		int n = count_array(content);
 		if (n<0)
 			return NULL;
@@ -420,11 +489,18 @@ create_from_bundle(struct sproto *s, const uint8_t * stream, size_t sz) {
 	return s;
 }
 
+// 作用：
+//		脚本解析proto结构，将其拆分为type部分和protocol部分，按统一格式打包并将其序列化成二进制字符串
+//		此函数根据此字符串内容将其解析成C程序能读的sproto结构，供之后的编码(encode)解码(decode)用
+//
+// 参数：
+//		proto：proto序列化后的二进制字符串
+//		sz：字符串长度
 struct sproto *
 sproto_create(const void * proto, size_t sz) {
 	struct pool mem;
 	pool_init(&mem);
-	struct sproto * s = (sproto *)pool_alloc(&mem, sizeof(*s));
+	struct sproto * s = (sproto *)pool_alloc(&mem, sizeof(*s));	// 分配sproto本身内存
 	if (s == NULL)
 		return NULL;
 	memset(s, 0, sizeof(*s));
@@ -595,6 +671,11 @@ fill_size(uint8_t * data, int sz) {
 	return sz + SIZEOF_LENGTH;
 }
 
+/*
+	编码一个32bit的整形
+	4Byte	:长度
+	4Byte	:内容
+*/
 static int
 encode_integer(uint32_t v, uint8_t * data, int size) {
 	if (size < SIZEOF_LENGTH + sizeof(v))
@@ -606,6 +687,11 @@ encode_integer(uint32_t v, uint8_t * data, int size) {
 	return fill_size(data, sizeof(v));
 }
 
+/*
+	编码一个64bit整形
+	4Byte	:长度
+	8Byte	:内容
+*/
 static int
 encode_uint64(uint64_t v, uint8_t * data, int size) {
 	if (size < SIZEOF_LENGTH + sizeof(v))
@@ -621,6 +707,11 @@ encode_uint64(uint64_t v, uint8_t * data, int size) {
 	return fill_size(data, sizeof(v));
 }
 
+/*
+	编码一个字符串
+	4Byte	:长度
+	nByte	:内容
+*/
 static int
 encode_string(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int size) {
 	if (size < SIZEOF_LENGTH)
@@ -629,6 +720,14 @@ encode_string(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int 
 	return fill_size(data, sz);
 }
 
+/*
+	编码一个用户定义结构
+	4Byte		:长度
+	nByte		:内容
+		2Byte	:field count
+		2Byte*n	:field value
+		nByte	:field data
+*/
 static int
 encode_struct(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int size) {
 	if (size < SIZEOF_LENGTH) {
@@ -653,6 +752,9 @@ uint32_to_uint64(int negative, uint8_t *buffer) {
 	}
 }
 
+/*
+	编码整形数组，做了优化，不用每一个都存长度，不过也添加了复杂性，编码32bit的时候遇到64的还要把之前32的扩到64
+*/
 static uint8_t *
 encode_integer_array(sproto_callback cb, void *ud, struct field *f, uint8_t *buffer, int size) {
 	uint8_t * header = buffer;
@@ -725,11 +827,22 @@ encode_integer_array(sproto_callback cb, void *ud, struct field *f, uint8_t *buf
 	return buffer;
 }
 
+
+/*
+	作用：
+		编码一个数组，遍历数组依次编码
+
+	参数：
+
+	格式：
+		2Byte:长度，解码的时候根据长度能够计算出数组长度
+		nByte:内容
+*/
 static int
 encode_array(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int size) {
 	if (size < SIZEOF_LENGTH)
 		return -1;
-	size -= SIZEOF_LENGTH;
+	size -= SIZEOF_LENGTH;	// 保存长度
 	int index = 1;
 	uint8_t * buffer = data + SIZEOF_LENGTH;
 	int type = f->type & ~SPROTO_TARRAY;
@@ -756,10 +869,11 @@ encode_array(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int s
 		}
 		break;
 	default:
+		// 结构或者字符串数组
 		for (;;) {
 			if (size < SIZEOF_LENGTH)
 				return -1;
-			size -= SIZEOF_LENGTH;
+			size -= SIZEOF_LENGTH;	// 每个string或者struct元素都会保存长度
 			int sz = cb(ud, f->name, type, index, f->st, buffer+SIZEOF_LENGTH, size);
 			if (sz < 0)
 				return -1;
@@ -778,6 +892,23 @@ encode_array(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int s
 	return fill_size(data, sz);
 }
 
+/*
+	作用：
+		对一段脚本数据(table)，按指定类型格式编码
+
+	参数：
+		st				:目标类型
+		buffer/size		:编码后的目标缓存及剩余大小
+		cb				:编码实用回调函数
+		ud				:杂项参数，脚本根据它取得数据
+
+	返回：
+		编码占用的空间
+
+	格式：
+		2Byte			:field count
+		2Byte * n		:n个field value
+*/
 int 
 sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback cb, void *ud) {
 	uint8_t * header = (uint8_t *)buffer;
@@ -788,9 +919,10 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 	data = header + header_sz;
 	size -= header_sz;
 	int i;
-	int index = 0;
+	int index = 0;	// used field count
 	int lasttag = -1;
 	for (i=0;i<st->n;i++) {
+		// 遍历目标类型的每个field去脚本中找相应的值
 		struct field *f = &st->f[i];
 		int type = f->type;
 		int value = 0;
@@ -811,6 +943,7 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 				if (sz == 0)
 					continue;
 				if (sz == sizeof(uint32_t)) {
+					// 2个字节可以存放得下，就按value编码直接放到field value处，否则放到data段
 					if (u.u32 < 0x7fff) {
 						value = (u.u32+1) * 2;
 						sz = 2;	// sz can be any number > 0
@@ -837,15 +970,17 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 		if (sz < 0)
 			return -1;
 		if (sz > 0) {
+			// 编码成功, sz是编码所占用的空间
 			if (value == 0) {
+				// field value 处无法存放，则占用data段空间
 				data += sz;
 				size -= sz;
 			}
-			uint8_t * record = header+SIZEOF_HEADER+SIZEOF_FIELD*index;
+			uint8_t * record = header+SIZEOF_HEADER+SIZEOF_FIELD*index;	// recodrd为 对应的field value内存
 			int tag = f->tag - lasttag - 1;
 			if (tag > 0) {
 				// skip tag
-				tag = (tag - 1) * 2 + 1;
+				tag = (tag - 1) * 2 + 1;	// 如果tag中间有空缺，这里就是添加一个奇数的tag value用于跳过这个空缺
 				if (tag > 0xffff)
 					return -1;
 				record[0] = tag & 0xff;
@@ -859,12 +994,13 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 			lasttag = f->tag;
 		}
 	}
-	header[0] = index & 0xff;
+	header[0] = index & 0xff;			
 	header[1] = (index >> 8) & 0xff;
 
 	int datasz = data - (header + header_sz);
 	data = header + header_sz;
 	if (index != st->maxn) {
+		// 如果没有用到st->maxn这么多field(可能因为这个field为nil)，就压缩多分配的空间
 		memmove(header + SIZEOF_HEADER + index * SIZEOF_FIELD, data, datasz);
 	}
 	return SIZEOF_HEADER + index * SIZEOF_FIELD + datasz;
@@ -950,6 +1086,19 @@ decode_array(sproto_callback cb, void *ud, struct field *f, uint8_t * stream) {
 	return 0;
 }
 
+/*
+	作用：
+		对一段二进制数据进行解码，生成table，table索引在ud中
+
+	参数：
+		st				:目标类型
+		buffer/size		:待解码的二进制数据
+		cb				:解码实用回调函数
+		ud				:杂项参数
+
+	返回：
+		
+*/
 int
 sproto_decode(struct sproto_type *st, const void * data, int size, sproto_callback cb, void *ud) {
 	int total = size;
