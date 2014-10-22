@@ -62,7 +62,7 @@ local typedef = P {
 	TYPE = namedpat("type", P"." * name * blank0 * V"STRUCT" ),
 	SUBPROTO = Ct((C"request" + C"response") * blanks * (name + V"STRUCT")),
 	PROTOCOL = namedpat("protocol", name * blanks * tag * blank0 * P"{" * multipat(V"SUBPROTO") * P"}"),
-	ALL = multipat(V"TYPE" + V"PROTOCOL"),	-- 或者是[TYPE]或者是[PROTOCOL]
+	ALL = multipat(V"TYPE" + V"PROTOCOL"),
 }
 
 local proto = blank0 * typedef * blank0
