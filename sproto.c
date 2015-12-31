@@ -17,6 +17,7 @@ struct field {
 	int type;
 	const char * name;
 	struct sproto_type * st;
+	int key;
 };
 
 struct sproto_type {
@@ -84,7 +85,7 @@ static void *
 pool_alloc(struct pool *p, size_t sz) {
 	// align by 8
 	sz = (sz + 7) & ~7;
-	if (sz > CHUNK_SIZE) {
+	if (sz >= CHUNK_SIZE) {
 		// 需要分配的大小超过默认CHUNK_SIZE，则按所需分配
 		return pool_newchunk(p, sz);
 	}
@@ -101,7 +102,7 @@ pool_alloc(struct pool *p, size_t sz) {
 		return ret;
 	}
 	// 当前chunk所剩内存不够用了
-	if (sz > p->current_used) {
+	if (sz >= p->current_used) {
 		// 所需的内存大于本Chunk已经使用过的内存，说明需求的内存超过CHUNK_SIZE/2，按其需要的量分配一块
 		return pool_newchunk(p, sz);
 	} else {
@@ -135,8 +136,8 @@ todword(const uint8_t *p) {
 static int
 count_array(const uint8_t * stream) {
 	uint32_t length = todword(stream);
-	stream += SIZEOF_LENGTH;
 	int n = 0;
+	stream += SIZEOF_LENGTH;
 	while (length > 0) {
 		uint32_t nsz;
 		if (length < SIZEOF_LENGTH)
@@ -180,7 +181,7 @@ struct_field(const uint8_t * stream, size_t sz) {
 	sz -= header;
 	stream += header;
 	for (i=0;i<fn;i++) {
-		int value= toword(field + i * SIZEOF_FIELD + SIZEOF_HEADER);
+		int value= toword(field + i * SIZEOF_FIELD);
 		uint32_t dsz;
 		if (value != 0)	// 数据存在field处，不关心
 			continue;
@@ -218,21 +219,23 @@ static const uint8_t *
 import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 	uint32_t sz;
 	const uint8_t * result;
+	int fn;
+	int i;
+	int array = 0;
+	int tag = -1;
 	f->tag = -1;
 	f->type = -1;
 	f->name = NULL;
 	f->st = NULL;
+	f->key = -1;
 
 	sz = todword(stream);
 	stream += SIZEOF_LENGTH;
 	result = stream + sz;
-	int fn = struct_field(stream, sz);
+	fn = struct_field(stream, sz);
 	if (fn < 0)
 		return NULL;
 	stream += SIZEOF_HEADER;
-	int i;
-	int array = 0;
-	int tag = -1;
 	for (i=0;i<fn;i++) {
 		int value;
 		++tag;
@@ -270,6 +273,9 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 		case 4:	// array
 			if (value)
 				array = SPROTO_TARRAY;
+			break;
+		case 5:	// key
+			f->key = value;
 			break;
 		default:
 			return NULL;
@@ -313,11 +319,16 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 //		下一个type数据
 static const uint8_t *
 import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
+	const uint8_t * result;
 	uint32_t sz = todword(stream);
 	int i;
+	int fn;
+	int n;
+	int maxn;
+	int last;
 	stream += SIZEOF_LENGTH;
-	const uint8_t * result = stream + sz; // result指向下一个type数据
-	int fn = struct_field(stream, sz);
+	result = stream + sz; // result指向下一个type数据
+	fn = struct_field(stream, sz);
 	if (fn <= 0 || fn > 2)	// type 最多只有2个filed：name和field数组，且他们value都为0，而指向后续数据
 		return NULL;
 	for (i=0;i<fn*SIZEOF_FIELD;i+=SIZEOF_FIELD) {
@@ -333,21 +344,22 @@ import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 		return result;
 	}
 	stream += todword(stream)+SIZEOF_LENGTH;	// second data
-	int n = count_array(stream);	// n个field
+	n = count_array(stream);	// n个field
 	if (n<0)
 		return NULL;
 	stream += SIZEOF_LENGTH;	// stream 指向第一个field数据
-	int maxn = n;
-	int last = -1;
+	maxn = n;
+	last = -1;
 	t->n = n;
 	t->f = (field *)pool_alloc(&s->memory, sizeof(struct field) * n);
 	for (i=0;i<n;i++) {
+		int tag;
 		struct field *f = &t->f[i];
 		stream = import_field(s, f, stream);
 		if (stream == NULL)
 			return NULL;
-		int tag = f->tag;
-		if (tag < last)
+		tag = f->tag;
+		if (tag <= last)
 			return NULL;	// tag must in ascending order
 		if (tag > last+1) {
 			++maxn;	// 如果tag之间有空缺，那么会填补一个skip tag用于跳到下个tag，这个填补的tag也会占用field
@@ -387,17 +399,20 @@ import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 //		nByte			:name data
 static const uint8_t *
 import_protocol(struct sproto *s, struct protocol *p, const uint8_t * stream) {
+	const uint8_t * result;
 	uint32_t sz = todword(stream);
+	int fn;
+	int i;
+	int tag;
 	stream += SIZEOF_LENGTH;
-	const uint8_t * result = stream + sz;
-	int fn = struct_field(stream, sz);
+	result = stream + sz;
+	fn = struct_field(stream, sz);
 	stream += SIZEOF_HEADER;
 	p->name = NULL;
 	p->tag = -1;
 	p->p[SPROTO_REQUEST] = NULL;
 	p->p[SPROTO_RESPONSE] = NULL;
-	int i;
-	int tag = 0;
+	tag = 0;
 	for (i=0;i<fn;i++,tag++) {
 		int value = toword(stream + SIZEOF_FIELD * i);
 		if (value & 1) { // 奇数值忽略
@@ -442,29 +457,29 @@ import_protocol(struct sproto *s, struct protocol *p, const uint8_t * stream) {
 
 static struct sproto *
 create_from_bundle(struct sproto *s, const uint8_t * stream, size_t sz) {
+	const uint8_t * content;
+	const uint8_t * typedata = NULL;
+	const uint8_t * protocoldata = NULL;
 	int fn = struct_field(stream, sz);
-	if (fn < 0)
+	int i;
+	if (fn < 0 || fn > 2)
 		return NULL;
 
 	stream += SIZEOF_HEADER;
+	content = stream + fn*SIZEOF_FIELD;	// content指向数据段
 
-	const uint8_t * content = stream + fn*SIZEOF_FIELD;	// content指向数据段
-	const uint8_t * typedata = NULL;
-	const uint8_t * protocoldata = NULL;
-
-	int i;
 	for (i=0;i<fn;i++) {
 		int value = toword(stream + i*SIZEOF_FIELD);	// field value
+		int n;
 		if (value != 0)	// 对于type array和protocol array的数据都存在field之后，所以此处必0
 			return NULL;
-
-		int n = count_array(content);
+		n = count_array(content);
 		if (n<0)
 			return NULL;
 		if (i == 0) {
 			typedata = content+SIZEOF_LENGTH;
 			s->type_n = n;
-			s->type = (sproto_type *)pool_alloc(&s->memory, n * sizeof(*s->type));
+			s->type = (struct sproto_type *)pool_alloc(&s->memory, n * sizeof(*s->type));
 		} else {
 			protocoldata = content+SIZEOF_LENGTH;
 			s->protocol_n = n;
@@ -499,8 +514,9 @@ create_from_bundle(struct sproto *s, const uint8_t * stream, size_t sz) {
 struct sproto *
 sproto_create(const void * proto, size_t sz) {
 	struct pool mem;
+	struct sproto * s;
 	pool_init(&mem);
-	struct sproto * s = (sproto *)pool_alloc(&mem, sizeof(*s));	// 分配sproto本身内存
+	s = (sproto *)pool_alloc(&mem, sizeof(*s));	// 分配sproto本身内存
 	if (s == NULL)
 		return NULL;
 	memset(s, 0, sizeof(*s));
@@ -521,13 +537,13 @@ sproto_release(struct sproto * s) {
 
 void
 sproto_dump(struct sproto *s) {
+	int i,j;
 	static const char * buildin[] = {
 		"integer",
 		"boolean",
 		"string",
 	};
 	printf("=== %d types ===\n", s->type_n);
-	int i,j;
 	for (i=0;i<s->type_n;i++) {
 		struct sproto_type *t = &s->type[i];
 		printf("%s\n", t->name);
@@ -540,21 +556,30 @@ sproto_dump(struct sproto *s) {
 			} else {
 				array[0] = 0;
 			}
-			int t = f->type & ~SPROTO_TARRAY;
-			if (t == SPROTO_TSTRUCT) {
-				type_name = f->st->name;
-			} else {
-				assert(t<SPROTO_TSTRUCT);
-				type_name = buildin[t];
+			{
+				int t = f->type & ~SPROTO_TARRAY;
+				if (t == SPROTO_TSTRUCT) {
+					type_name = f->st->name;
+				} else {
+					assert(t<SPROTO_TSTRUCT);
+					type_name = buildin[t];
+				}
 			}
-
-			printf("\t%s (%d) %s%s\n", f->name, f->tag, array, type_name);
+			if (f->key >= 0) {
+				printf("\t%s (%d) %s%s(%d)\n", f->name, f->tag, array, type_name, f->key);
+			} else {
+				printf("\t%s (%d) %s%s\n", f->name, f->tag, array, type_name);
+			}
 		}
 	}
 	printf("=== %d protocol ===\n", s->protocol_n);
 	for (i=0;i<s->protocol_n;i++) {
 		struct protocol *p = &s->proto[i];
-		printf("\t%s (%d) request:%s", p->name, p->tag, p->p[SPROTO_REQUEST]->name);
+		if (p->p[SPROTO_REQUEST]) {
+			printf("\t%s (%d) request:%s", p->name, p->tag, p->p[SPROTO_REQUEST]->name);
+		} else {
+			printf("\t%s (%d) request:(null)", p->name, p->tag);
+		}
 		if (p->p[SPROTO_RESPONSE]) {
 			printf(" response:%s", p->p[SPROTO_RESPONSE]->name);
 		}
@@ -563,8 +588,8 @@ sproto_dump(struct sproto *s) {
 }
 
 // query
-int 
-sproto_prototag(struct sproto *sp, const char * name) {
+int
+sproto_prototag(const struct sproto *sp, const char * name) {
 	int i;
 	for (i=0;i<sp->protocol_n;i++) {
 		if (strcmp(name, sp->proto[i].name) == 0) {
@@ -575,7 +600,7 @@ sproto_prototag(struct sproto *sp, const char * name) {
 }
 
 static struct protocol *
-query_proto(struct sproto *sp, int tag) {
+query_proto(const struct sproto *sp, int tag) {
 	int begin = 0, end = sp->protocol_n;
 	while(begin<end) {
 		int mid = (begin+end)/2;
@@ -592,20 +617,21 @@ query_proto(struct sproto *sp, int tag) {
 	return NULL;
 }
 
-struct sproto_type * 
-sproto_protoquery(struct sproto *sp, int proto, int what) {
+struct sproto_type *
+sproto_protoquery(const struct sproto *sp, int proto, int what) {
+	struct protocol * p;
 	if (what <0 || what >1) {
 		return NULL;
 	}
-	struct protocol * p = query_proto(sp, proto);
+	p = query_proto(sp, proto);
 	if (p) {
 		return p->p[what];
 	}
 	return NULL;
 }
 
-const char * 
-sproto_protoname(struct sproto *sp, int proto) {
+const char *
+sproto_protoname(const struct sproto *sp, int proto) {
 	struct protocol * p = query_proto(sp, proto);
 	if (p) {
 		return p->name;
@@ -613,8 +639,8 @@ sproto_protoname(struct sproto *sp, int proto) {
 	return NULL;
 }
 
-struct sproto_type * 
-get_sproto_type(struct sproto *sp, const char * type_name) {
+struct sproto_type *
+sproto_type(const struct sproto *sp, const char * type_name) {
 	int i;
 	for (i=0;i<sp->type_n;i++) {
 		if (strcmp(type_name, sp->type[i].name) == 0) {
@@ -630,14 +656,16 @@ sproto_name(struct sproto_type * st) {
 }
 
 static struct field *
-findtag(struct sproto_type *st, int tag) {
+findtag(const struct sproto_type *st, int tag) {
+	int begin, end;
 	if (st->base >=0 ) {
 		tag -= st->base;
 		if (tag < 0 || tag >= st->n)
 			return NULL;
 		return &st->f[tag];
 	}
-	int begin = 0, end = st->n;
+	begin = 0;
+	end = st->n;
 	while (begin < end) {
 		int mid = (begin+end)/2;
 		struct field *f = &st->f[mid];
@@ -656,14 +684,10 @@ findtag(struct sproto_type *st, int tag) {
 
 // encode & decode
 // sproto_callback(void *ud, int tag, int type, struct sproto_type *, void *value, int length)
-//		return size, -1 means error
+//	  return size, -1 means error
 
 static inline int
 fill_size(uint8_t * data, int sz) {
-	if (sz < 0)
-		return -1;
-	if (sz == 0)
-		return 0;
 	data[0] = sz & 0xff;
 	data[1] = (sz >> 8) & 0xff;
 	data[2] = (sz >> 16) & 0xff;
@@ -708,17 +732,27 @@ encode_uint64(uint64_t v, uint8_t * data, int size) {
 }
 
 /*
-	编码一个字符串
-	4Byte	:长度
-	nByte	:内容
-*/
+//#define CB(tagname,type,index,subtype,value,length) cb(ud, tagname,type,index,subtype,value,length)
+
 static int
-encode_string(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int size) {
-	if (size < SIZEOF_LENGTH)
-		return -1;
-	int sz = cb(ud, f->name, SPROTO_TSTRING, 0, NULL, data+SIZEOF_LENGTH, size-SIZEOF_LENGTH);
-	return fill_size(data, sz);
+do_cb(sproto_callback cb, void *ud, const char *tagname, int type, int index, struct sproto_type *subtype, void *value, int length) {
+	if (subtype) {
+		if (type >= 0) {
+			printf("callback: tag=%s[%d], subtype[%s]:%d\n",tagname,index, subtype->name, type);
+		} else {
+			printf("callback: tag=%s[%d], subtype[%s]\n",tagname,index, subtype->name);
+		}
+	} else if (index > 0) {
+		printf("callback: tag=%s[%d]\n",tagname,index);
+	} else if (index == 0) {
+		printf("callback: tag=%s\n",tagname);
+	} else {
+		printf("callback: tag=%s [mainkey]\n",tagname);
+	}
+	return cb(ud, tagname,type,index,subtype,value,length);
 }
+#define CB(tagname,type,index,subtype,value,length) do_cb(cb,ud, tagname,type,index,subtype,value,length)
+*/
 
 /*
 	编码一个用户定义结构
@@ -729,11 +763,19 @@ encode_string(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int 
 		nByte	:field data
 */
 static int
-encode_struct(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int size) {
-	if (size < SIZEOF_LENGTH) {
+encode_object(sproto_callback cb, struct sproto_arg *args, uint8_t *data, int size) {
+	int sz;
+	if (size < SIZEOF_LENGTH)
 		return -1;
+	args->value = data+SIZEOF_LENGTH;
+	args->length = size-SIZEOF_LENGTH;
+	sz = cb(args);
+	if (sz <= 0)
+		return sz;
+	if (args->type == SPROTO_TSTRING) {
+		--sz;	// the length of null string is 1
 	}
-	int sz = cb(ud, f->name, SPROTO_TSTRUCT, 0, f->st, data+SIZEOF_LENGTH, size-SIZEOF_LENGTH);
+	assert(sz <= size-SIZEOF_LENGTH);	// verify buffer overflow
 	return fill_size(data, sz);
 }
 
@@ -756,23 +798,29 @@ uint32_to_uint64(int negative, uint8_t *buffer) {
 	编码整形数组，做了优化，不用每一个都存长度，不过也添加了复杂性，编码32bit的时候遇到64的还要把之前32的扩到64
 */
 static uint8_t *
-encode_integer_array(sproto_callback cb, void *ud, struct field *f, uint8_t *buffer, int size) {
+encode_integer_array(sproto_callback cb, struct sproto_arg *args, uint8_t *buffer, int size) {
 	uint8_t * header = buffer;
+	int intlen;
+	int index;
 	if (size < 1)
 		return NULL;
 	buffer++;
 	size--;
-	int intlen = sizeof(uint32_t);
-	int index = 1;
+	intlen = sizeof(uint32_t);
+	index = 1;
 	for (;;) {
+		int sz;
 		union {
 			uint64_t u64;
 			uint32_t u32;
 		} u;
-		int sz = cb(ud, f->name, SPROTO_TINTEGER, index, f->st, &u, sizeof(u));
+		args->value = &u;
+		args->length = sizeof(u);
+		args->index = index;
+		sz = cb(args);
 		if (sz < 0)
 			return NULL;
-		if (sz == 0)
+		if (sz == 0)	// nil object, end of array
 			break;
 		if (size < sizeof(uint64_t))
 			return NULL;
@@ -787,24 +835,26 @@ encode_integer_array(sproto_callback cb, void *ud, struct field *f, uint8_t *buf
 				uint32_to_uint64(v & 0x80000000, buffer);
 			}
 		} else {
+			uint64_t v;
 			if (sz != sizeof(uint64_t))
 				return NULL;
 			if (intlen == sizeof(uint32_t)) {
+				int i;
 				// rearrange
 				size -= (index-1) * sizeof(uint32_t);
 				if (size < sizeof(uint64_t))
 					return NULL;
 				buffer += (index-1) * sizeof(uint32_t);
-				int i;
 				for (i=index-2;i>=0;i--) {
+					int negative;
 					memcpy(header+1+i*sizeof(uint64_t), header+1+i*sizeof(uint32_t), sizeof(uint32_t));
-					int negative = header[1+i*sizeof(uint64_t)+3] & 0x80;
+					negative = header[1+i*sizeof(uint64_t)+3] & 0x80;
 					uint32_to_uint64(negative, header+1+i*sizeof(uint64_t));
 				}
 				intlen = sizeof(uint64_t);
 			}
 
-			uint64_t v = u.u64;
+			v = u.u64;
 			buffer[0] = v & 0xff;
 			buffer[1] = (v >> 8) & 0xff;
 			buffer[2] = (v >> 16) & 0xff;
@@ -839,55 +889,64 @@ encode_integer_array(sproto_callback cb, void *ud, struct field *f, uint8_t *buf
 		nByte:内容
 */
 static int
-encode_array(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int size) {
+encode_array(sproto_callback cb, struct sproto_arg *args, uint8_t *data, int size) {
+	uint8_t * buffer;
+	int sz;
 	if (size < SIZEOF_LENGTH)
 		return -1;
-	size -= SIZEOF_LENGTH;	// 保存长度
-	int index = 1;
-	uint8_t * buffer = data + SIZEOF_LENGTH;
-	int type = f->type & ~SPROTO_TARRAY;
-	switch (type) {
+	size -= SIZEOF_LENGTH;
+	buffer = data + SIZEOF_LENGTH;
+	switch (args->type) {
 	case SPROTO_TINTEGER:
-		buffer = encode_integer_array(cb,ud,f,buffer,size);
+		buffer = encode_integer_array(cb,args,buffer,size);
 		if (buffer == NULL)
 			return -1;
 		break;
 	case SPROTO_TBOOLEAN:
+		args->index = 1;
 		for (;;) {
 			int v = 0;
-			int sz = cb(ud, f->name, type, index, f->st, &v, sizeof(v));
+			args->value = &v;
+			args->length = sizeof(v);
+			sz = cb(args);
 			if (sz < 0)
 				return -1;
-			if (sz == 0)
+			if (sz == 0)	// nil object , end of array
 				break;
 			if (size < 1)
 				return -1;
 			buffer[0] = v ? 1: 0;
 			size -= 1;
 			buffer += 1;
-			index++;
+			++args->index;
 		}
 		break;
 	default:
 		// 结构或者字符串数组
+		args->index = 1;
 		for (;;) {
 			if (size < SIZEOF_LENGTH)
 				return -1;
 			size -= SIZEOF_LENGTH;	// 每个string或者struct元素都会保存长度
-			int sz = cb(ud, f->name, type, index, f->st, buffer+SIZEOF_LENGTH, size);
-			if (sz < 0)
-				return -1;
+			args->value = buffer+SIZEOF_LENGTH;
+			args->length = size;
+			sz = cb(args);
 			if (sz == 0)
 				break;
+			if (sz < 0)
+				return -1;
+			if (args->type == SPROTO_TSTRING) {
+				--sz;
+			}
 			fill_size(buffer, sz);
 			buffer += SIZEOF_LENGTH+sz;
 			size -=sz;
-			index ++;
+			++args->index;
 		}
 		break;
 	}
-	int sz = buffer - (data + SIZEOF_LENGTH);
-	if (sz == 0)
+	sz = buffer - (data + SIZEOF_LENGTH);
+	if (sz == 0)	// empty array
 		return 0;
 	return fill_size(data, sz);
 }
@@ -910,37 +969,51 @@ encode_array(sproto_callback cb, void *ud, struct field *f, uint8_t *data, int s
 		2Byte * n		:n个field value
 */
 int 
-sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback cb, void *ud) {
+sproto_encode(const struct sproto_type *st, void * buffer, int size, sproto_callback cb, void *ud) {
+	struct sproto_arg args;
 	uint8_t * header = (uint8_t *)buffer;
 	uint8_t * data;
 	int header_sz = SIZEOF_HEADER + st->maxn * SIZEOF_FIELD;
+	int i;
+	int index;
+	int lasttag;
+	int datasz;
 	if (size < header_sz)
 		return -1;
+	args.ud = ud;
 	data = header + header_sz;
 	size -= header_sz;
-	int i;
-	int index = 0;	// used field count
-	int lasttag = -1;
+	index = 0;
+	lasttag = -1;
 	for (i=0;i<st->n;i++) {
 		// 遍历目标类型的每个field去脚本中找相应的值
 		struct field *f = &st->f[i];
 		int type = f->type;
 		int value = 0;
 		int sz = -1;
+		args.tagname = f->name;
+		args.tagid = f->tag;
+		args.subtype = f->st;
+		args.mainindex = f->key;
 		if (type & SPROTO_TARRAY) {
-			sz = encode_array(cb,ud, f, data, size);
+			args.type = type & ~SPROTO_TARRAY;
+			sz = encode_array(cb, &args, data, size);
 		} else {
+			args.type = type;
+			args.index = 0;
 			switch(type) {
-			case SPROTO_TINTEGER: 
+			case SPROTO_TINTEGER:
 			case SPROTO_TBOOLEAN: {
 				union {
 					uint64_t u64;
 					uint32_t u32;
 				} u;
-				sz = cb(ud, f->name, type, 0, NULL, &u, sizeof(u));
+				args.value = &u;
+				args.length = sizeof(u);
+				sz = cb(&args);
 				if (sz < 0)
 					return -1;
-				if (sz == 0)
+				if (sz == 0)	// nil object
 					continue;
 				if (sz == sizeof(uint32_t)) {
 					// 2个字节可以存放得下，就按value编码直接放到field value处，否则放到data段
@@ -957,27 +1030,25 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 				}
 				break;
 			}
-			case SPROTO_TSTRING: {
-				sz = encode_string(cb, ud, f, data, size);
+			case SPROTO_TSTRUCT:
+			case SPROTO_TSTRING:
+				sz = encode_object(cb, &args, data, size);
 				break;
-			}
-			case SPROTO_TSTRUCT: {
-				sz = encode_struct(cb, ud, f, data, size);
-				break;
-			}
 			}
 		}
 		if (sz < 0)
 			return -1;
 		if (sz > 0) {
+			uint8_t * record;
+			int tag;
 			// 编码成功, sz是编码所占用的空间
 			if (value == 0) {
 				// field value 处无法存放，则占用data段空间
 				data += sz;
 				size -= sz;
 			}
-			uint8_t * record = header+SIZEOF_HEADER+SIZEOF_FIELD*index;	// recodrd为 对应的field value内存
-			int tag = f->tag - lasttag - 1;
+			record = header+SIZEOF_HEADER+SIZEOF_FIELD*index;	// recodrd为 对应的field value内存
+			tag = f->tag - lasttag - 1;
 			if (tag > 0) {
 				// skip tag
 				tag = (tag - 1) * 2 + 1;	// 如果tag中间有空缺，这里就是添加一个奇数的tag value用于跳过这个空缺
@@ -997,7 +1068,7 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 	header[0] = index & 0xff;			
 	header[1] = (index >> 8) & 0xff;
 
-	int datasz = data - (header + header_sz);
+	datasz = data - (header + header_sz);
 	data = header + header_sz;
 	if (index != st->maxn) {
 		// 如果没有用到st->maxn这么多field(可能因为这个field为nil)，就压缩多分配的空间
@@ -1007,9 +1078,8 @@ sproto_encode(struct sproto_type *st, void * buffer, int size, sproto_callback c
 }
 
 static int
-decode_array_object(sproto_callback cb, void *ud, struct field *f, uint8_t * stream, int sz) {
+decode_array_object(sproto_callback cb, struct sproto_arg *args, uint8_t * stream, int sz) {
 	uint32_t hsz;
-	int type = f->type & ~SPROTO_TARRAY;
 	int index = 1;
 	while (sz > 0) {
 		if (sz < SIZEOF_LENGTH)
@@ -1019,7 +1089,10 @@ decode_array_object(sproto_callback cb, void *ud, struct field *f, uint8_t * str
 		sz -= SIZEOF_LENGTH;
 		if (hsz > sz)
 			return -1;
-		if (cb(ud, f->name, type, index, f->st, stream, hsz))
+		args->index = index;
+		args->value = stream;
+		args->length = hsz;
+		if (cb(args))
 			return -1;
 		sz -= hsz;
 		stream += hsz;
@@ -1038,16 +1111,17 @@ expand64(uint32_t v) {
 }
 
 static int
-decode_array(sproto_callback cb, void *ud, struct field *f, uint8_t * stream) {
+decode_array(sproto_callback cb, struct sproto_arg *args, uint8_t * stream) {
 	uint32_t sz = todword(stream);
-	int type = f->type & ~SPROTO_TARRAY;
+	int type = args->type;
 	int i;
 	stream += SIZEOF_LENGTH;
 	switch (type) {
 	case SPROTO_TINTEGER: {
+		int len;
 		if (sz < 1)
 			return -1;
-		int len = *stream;
+		len = *stream;
 		++stream;
 		--sz;
 		if (len == sizeof(uint32_t)) {
@@ -1055,7 +1129,10 @@ decode_array(sproto_callback cb, void *ud, struct field *f, uint8_t * stream) {
 				return -1;
 			for (i=0;i<sz/sizeof(uint32_t);i++) {
 				uint64_t value = expand64(todword(stream + i*sizeof(uint32_t)));
-				cb(ud, f->name, SPROTO_TINTEGER, i+1, NULL, &value, sizeof(value));
+				args->index = i+1;
+				args->value = &value;
+				args->length = sizeof(value);
+				cb(args);
 			}
 		} else if (len == sizeof(uint64_t)) {
 			if (sz % sizeof(uint64_t) != 0)
@@ -1064,7 +1141,10 @@ decode_array(sproto_callback cb, void *ud, struct field *f, uint8_t * stream) {
 				uint64_t low = todword(stream + i*sizeof(uint64_t));
 				uint64_t hi = todword(stream + i*sizeof(uint64_t) + sizeof(uint32_t));
 				uint64_t value = low | hi << 32;
-				cb(ud, f->name, SPROTO_TINTEGER, i+1, NULL, &value, sizeof(value));
+				args->index = i+1;
+				args->value = &value;
+				args->length = sizeof(value);
+				cb(args);
 			}
 		} else {
 			return -1;
@@ -1073,13 +1153,16 @@ decode_array(sproto_callback cb, void *ud, struct field *f, uint8_t * stream) {
 	}
 	case SPROTO_TBOOLEAN:
 		for (i=0;i<sz;i++) {
-			int value = stream[i];
-			cb(ud, f->name, SPROTO_TBOOLEAN, i+1, NULL, &value, sizeof(value));
+			uint64_t value = stream[i];
+			args->index = i+1;
+			args->value = &value;
+			args->length = sizeof(value);
+			cb(args);
 		}
 		break;
 	case SPROTO_TSTRING:
 	case SPROTO_TSTRUCT:
-		return decode_array_object(cb, ud, f, stream, sz);
+		return decode_array_object(cb, args, stream, sz);
 	default:
 		return -1;
 	}
@@ -1100,13 +1183,18 @@ decode_array(sproto_callback cb, void *ud, struct field *f, uint8_t * stream) {
 		
 */
 int
-sproto_decode(struct sproto_type *st, const void * data, int size, sproto_callback cb, void *ud) {
+sproto_decode(const struct sproto_type *st, const void * data, int size, sproto_callback cb, void *ud) {
+	struct sproto_arg args;
 	int total = size;
 	uint8_t * stream;
 	uint8_t * datastream;
 	int fn;
+	int i;
+	int tag;
 	if (size < SIZEOF_HEADER)
 		return -1;
+	// debug print
+	// printf("sproto_decode[%p] (%s)\n", ud, st->name);
 	stream = (uint8_t *)data;
 	fn = toword(stream);
 	stream += SIZEOF_HEADER;
@@ -1114,19 +1202,21 @@ sproto_decode(struct sproto_type *st, const void * data, int size, sproto_callba
 	if (size < fn * SIZEOF_FIELD)
 		return -1;
 	datastream = stream + fn * SIZEOF_FIELD;
-	size -= fn * SIZEOF_FIELD ;
+	size -= fn * SIZEOF_FIELD;
+	args.ud = ud;
 
-	int i;
-	int tag = -1;
+	tag = -1;
 	for (i=0;i<fn;i++) {
-		++ tag;
+		uint8_t * currentdata;
+		struct field * f;
 		int value = toword(stream + i * SIZEOF_FIELD);
+		++ tag;
 		if (value & 1) {
 			tag += value/2;
 			continue;
 		}
 		value = value/2 - 1;
-		uint8_t * currentdata = datastream;
+		currentdata = datastream;
 		if (value < 0) {
 			uint32_t sz;
 			if (size < SIZEOF_LENGTH)
@@ -1137,12 +1227,18 @@ sproto_decode(struct sproto_type *st, const void * data, int size, sproto_callba
 			datastream += sz+SIZEOF_LENGTH;
 			size -= sz+SIZEOF_LENGTH;
 		}
-		struct field * f= findtag(st, tag);
+		f = findtag(st, tag);
 		if (f == NULL)
 			continue;
+		args.tagname = f->name;
+		args.tagid = f->tag;
+		args.type = f->type & ~SPROTO_TARRAY;
+		args.subtype = f->st;
+		args.index = 0;
+		args.mainindex = f->key;
 		if (value < 0) {
 			if (f->type & SPROTO_TARRAY) {
-				if (decode_array(cb, ud, f, currentdata)) {
+				if (decode_array(cb, &args, currentdata)) {
 					return -1;
 				}
 			} else {
@@ -1151,21 +1247,27 @@ sproto_decode(struct sproto_type *st, const void * data, int size, sproto_callba
 					uint32_t sz = todword(currentdata);
 					if (sz == sizeof(uint32_t)) {
 						uint64_t v = expand64(todword(currentdata + SIZEOF_LENGTH));
-						cb(ud, f->name, SPROTO_TINTEGER, 0, NULL, &v, sizeof(v));
+						args.value = &v;
+						args.length = sizeof(v);
+						cb(&args);
 					} else if (sz != sizeof(uint64_t)) {
 						return -1;
 					} else {
 						uint32_t low = todword(currentdata + SIZEOF_LENGTH);
 						uint32_t hi = todword(currentdata + SIZEOF_LENGTH + sizeof(uint32_t));
 						uint64_t v = (uint64_t)low | (uint64_t) hi << 32;
-						cb(ud, f->name, SPROTO_TINTEGER, 0, NULL, &v, sizeof(v));
+						args.value = &v;
+						args.length = sizeof(v);
+						cb(&args);
 					}
 					break;
 				}
-				case SPROTO_TSTRING: 
+				case SPROTO_TSTRING:
 				case SPROTO_TSTRUCT: {
 					uint32_t sz = todword(currentdata);
-					if (cb(ud, f->name, f->type, 0, f->st, currentdata+SIZEOF_LENGTH, sz))
+					args.value = currentdata+SIZEOF_LENGTH;
+					args.length = sz;
+					if (cb(&args))
 						return -1;
 					break;
 				}
@@ -1177,7 +1279,9 @@ sproto_decode(struct sproto_type *st, const void * data, int size, sproto_callba
 			return -1;
 		} else {
 			uint64_t v = value;
-			cb(ud, f->name, f->type, 0, NULL, &v, sizeof(v));
+			args.value = &v;
+			args.length = sizeof(v);
+			cb(&args);
 		}
 	}
 	return total - size;
@@ -1236,7 +1340,7 @@ write_ff(const uint8_t * src, uint8_t * des, int n) {
 	}
 }
 
-int 
+int
 sproto_pack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	uint8_t tmp[8];
 	int i;
@@ -1293,7 +1397,7 @@ sproto_pack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	return size;
 }
 
-int 
+int
 sproto_unpack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	const uint8_t * src = (const uint8_t *)srcv;
 	uint8_t * buffer = (uint8_t *)bufferv;

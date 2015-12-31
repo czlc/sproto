@@ -25,7 +25,6 @@ foo 2 {
 bar 3 {}
 
 blackhole 4 {
-	request {}
 }
 ]]
 
@@ -35,6 +34,22 @@ local client_proto = sproto.parse [[
 	session 1 : integer
 }
 ]]
+
+
+assert(server_proto:exist_type "package")
+assert(server_proto:exist_proto "foobar")
+
+print("=== default table")
+
+print_r(server_proto:default("package"))
+print_r(server_proto:default("foobar", "REQUEST"))
+assert(server_proto:default("foo", "REQUEST")==nil)
+assert(server_proto:request_encode("foo")=="")
+server_proto:response_encode("foo", { ok = true })
+assert(server_proto:request_decode("blackhole")==nil)
+assert(server_proto:response_decode("blackhole")==nil)
+
+print("=== test 1")
 
 -- The type package must has two field : type and session
 local server = server_proto:host "package"
@@ -74,4 +89,10 @@ assert(type == "REQUEST" and name == "bar" and request == nil and response == ni
 local req = client_request "blackhole"
 print("request blackhole size = ", #req)
 
-
+print("=== test 2")
+local v, tag = server_proto:request_encode("foobar", { what = "hello"})
+print("tag =", tag)
+print_r(server_proto:request_decode("foobar", v))
+local v, tag = server_proto:response_encode("foobar", { ok = true })
+print("tag =", tag)
+print_r(server_proto:response_decode("foobar", v))
