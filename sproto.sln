@@ -6,7 +6,6 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "lua", "lua", "{FD39EB10-3749-4F54-93E2-660619501C4D}"
 	ProjectSection(SolutionItems) = preProject
 		data_desc.txt = data_desc.txt
-		lib.lua = lib.lua
 		print_r.lua = print_r.lua
 		sproto.lua = sproto.lua
 		sprotoparser.lua = sprotoparser.lua

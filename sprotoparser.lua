@@ -6,12 +6,12 @@ local packvalue
 
 if _VERSION == "Lua 5.3" then
 	function packbytes(str)
-		return string.pack("<s4",str)
+		return string.pack("<s4",str)	-- 字符串加4字节长度在前面
 	end
 
 	function packvalue(id)
-		id = (id + 1) * 2
-		return string.pack("<I2",id)
+		id = (id + 1) * 2				-- https://github.com/cloudwu/sproto#wire-protocol
+		return string.pack("<I2",id)	-- 2字节
 	end
 else
 	function packbytes(str)
@@ -57,37 +57,76 @@ local exception = lpeg.Cmt( lpeg.Carg(1) , function ( _ , pos, parser_state)
 	return pos
 end)
 
-local eof = P(-1)	-- 匹配字符串结尾
-local newline = lpeg.Cmt((P"\n" + "\r\n") * lpeg.Carg(1) ,count_lines)	-- 匹配换行，并进行行统计
-local line_comment = "#" * (1 - newline) ^0 * (newline + eof)	-- 匹配行注释
-local blank = S" \t" + newline + line_comment	-- 匹配 空格 or tab or 换行 or 行注释
-local blank0 = blank ^ 0	-- 匹配0或者多个空
-local blanks = blank ^ 1	-- 匹配1或者多个空
+local eof = P(-1)															-- 匹配字符串结尾
+local newline = lpeg.Cmt((P"\n" + "\r\n") * lpeg.Carg(1) ,count_lines)		-- 匹配换行，并进行行统计
+local line_comment = "#" * (1 - newline) ^0 * (newline + eof)				-- 匹配行注释
+local blank = S" \t" + newline + line_comment								-- 匹配 空格 or tab or 换行 or 行注释
+local blank0 = blank ^ 0													-- 匹配0或者多个空
+local blanks = blank ^ 1													-- 匹配1或者多个空
 local alpha = R"az" + R"AZ" + "_"
 local alnum = alpha + R"09"
-local word = alpha * alnum ^ 0	-- 匹配合法命名
-local name = C(word) -- 取得合法命名
-local typename = C(word * ("." * word) ^ 0) -- 取得类型名
-local tag = R"09" ^ 1 / tonumber -- 取得tonumber(tag)
-local mainkey = "(" * blank0 * name * blank0 * ")"
+local word = alpha * alnum ^ 0												-- 匹配合法命名
+local name = C(word)														-- 取得合法命名
+local typename = C(word * ("." * word) ^ 0)									-- 取得类型名，A.B.C.D
+local tag = R"09" ^ 1 / tonumber											-- 取得tonumber(tag)
+local mainkey = "(" * blank0 * name * blank0 * ")"							-- 取得mainkey
 
--- 匹配多个pattern
+-- 匹配多个black隔开的pattern
 local function multipat(pat)
-	-- 是否应该是return Ct(blank0 * (pat + blanks) ^ 0 * pat^0 * blank0)?
 	return Ct(blank0 * (pat * blanks) ^ 0 * pat^0 * blank0)
 end
 
 -- 命名pattern
 -- {
 --		type = name,
---		[1] = xxx,
---		[2] = xxx,
+--		[1] = C1,
+--		[2] = C2,
 --		...
 -- }
 local function namedpat(name, pat)
 	return Ct(Cg(Cc(name), "type") * Cg(pat))
 end
 
+
+--[[
+	FIELD = {
+		type = "field",
+		[1] = field name,
+		[2] = tag,
+		[3] = "*",(可选)
+		[4] = type name
+		[5] = main key,(可选)
+	}
+
+	STRUCT = {
+		[1] = FIELD / TYPE,
+		[2] = FIELD / TYPE,
+		[3] = ...
+	}
+	
+	TYPE = {
+		type = "type",
+		[1] = type name,
+		[2] = STRUCT,
+	}
+
+	SUBPROTO = {
+		[1] = "request" or "response",
+		[2] = type name,
+		[3] = STRUCT
+	}
+
+	PROTOCOL = {
+		type = "protocol",
+		[1] = protocol name,
+		[2] = tag,
+		[3] = {
+			SUBPROTO,
+			SUBPROTO,
+			SUBPROTO,
+		}
+	}
+]]
 local typedef = P {
 	"ALL",
 	FIELD = namedpat("field", (name * blanks * tag * blank0 * ":" * blank0 * (C"*")^-1 * typename * mainkey^0)),
@@ -239,8 +278,10 @@ end
 
 local function parser(text,filename)
 	local state = { file = filename, pos = 0, line = 1 }
-	-- 匹配proto，-1表示匹配整个字符串
-	-- +exception表示如果不匹配就输出错误
+	-- 匹配proto
+	-- -1 等于 "" - 1，也等于lpeg.P("") - lpeg.(1)，表示如果匹配不到任何字符则匹配一个空字符
+	-- * -1 只有到了字符串结尾才可能匹配成功，所以它表示匹配整个字符串
+	-- + exception表示如果不匹配就输出错误
 	local r = lpeg.match(proto * -1 + exception , text , 1, state ) -- state是传递给lpeg的第一个额外参数，可以通过lpeg.Carg(1)取到
 	return flattypename(check_protocol(adjust(r)))
 end
@@ -290,28 +331,28 @@ local function packfield(f)
 	local strtbl = {}
 	if f.array then
 		if f.key then
-			table.insert(strtbl, "\6\0")  -- 6 fields
+			table.insert(strtbl, "\6\0")					-- 6 fields
 		else
-			table.insert(strtbl, "\5\0")  -- 5 fields，用一个word来表示fn
+			table.insert(strtbl, "\5\0")					-- 5 fields，用一个word来表示fn
 		end
 	else
-		table.insert(strtbl, "\4\0")	-- 4 fields
+		table.insert(strtbl, "\4\0")						-- 4 fields
 	end
-	table.insert(strtbl, "\0\0")	-- name	(tag = 0, ref an object)
+	table.insert(strtbl, "\0\0")							-- name	(tag = 0, ref an object)
 	if f.buildin then
-		table.insert(strtbl, packvalue(f.buildin))	-- buildin (tag = 1)
-		table.insert(strtbl, "\1\0")	-- skip (tag = 2) 是buildin类型，则忽略type值
-		table.insert(strtbl, packvalue(f.tag))		-- tag (tag = 3)
+		table.insert(strtbl, packvalue(f.buildin))			-- buildin (tag = 1)
+		table.insert(strtbl, "\1\0")						-- skip (tag = 2) 是buildin类型，则忽略type值
+		table.insert(strtbl, packvalue(f.tag))				-- tag (tag = 3)
 	else
-		table.insert(strtbl, "\1\0")	-- skip (tag = 1) 非buildin类型，忽略buildin值
-		table.insert(strtbl, packvalue(f.type))		-- type (tag = 2)
-		table.insert(strtbl, packvalue(f.tag))		-- tag (tag = 3)
+		table.insert(strtbl, "\1\0")						-- skip (tag = 1) 非buildin类型，忽略buildin值
+		table.insert(strtbl, packvalue(f.type))				-- type (tag = 2)
+		table.insert(strtbl, packvalue(f.tag))				-- tag (tag = 3)
 	end
 	if f.array then
-		table.insert(strtbl, packvalue(1))	-- array = true (tag = 4)
+		table.insert(strtbl, packvalue(1))					-- array (tag = 4)
 	end
 	if f.key then
-		table.insert(strtbl, packvalue(f.key)) -- key tag (tag = 5)
+		table.insert(strtbl, packvalue(f.key))				-- key tag (tag = 5)
 	end
 	table.insert(strtbl, packbytes(f.name)) -- external object (name)
 	return packbytes(table.concat(strtbl))
@@ -339,7 +380,8 @@ local function packtype(name, t, alltypes)
 		tmp.array = f.array
 		tmp.name = f.name
 		tmp.tag = f.tag
-
+		-- 找到f中typename和key字段，它们保存的类型字符串，将它们转成id，分为自定义类型id和buildin类型id
+		-- 然后存入fields表
 		tmp.buildin = buildin_types[f.typename]
 		local subtype
 		if not tmp.buildin then

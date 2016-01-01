@@ -40,7 +40,7 @@ function sproto.parse(ptext)
 	return sproto.new(pbin)
 end
 
--- 创建协议处理器
+-- 创建protocol processor
 -- 拥有attach，dispatch功能
 function sproto:host( packagename )
 	packagename = packagename or  "package"
@@ -62,6 +62,7 @@ local function querytype(self, typename)
 	return v
 end
 
+-- 是否存在此自定义类型
 function sproto:exist_type(typename)
 	local v = self.__tcache[typename]
 	if not v then
@@ -112,6 +113,7 @@ local function queryproto(self, pname)
 	return v
 end
 
+-- 是否存在此协议
 function sproto:exist_proto(pname)
 	local v = self.__pcache[pname]
 	if not v then

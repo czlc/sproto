@@ -71,7 +71,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="lsproto.c" />
-    <ClCompile Include="main.c" />
     <ClCompile Include="sproto.c" />
   </ItemGroup>
   <ItemGroup>
