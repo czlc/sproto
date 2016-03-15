@@ -261,6 +261,32 @@ local function check_protocol(r)
 	return r
 end
 
+local function check_protocol(r)
+	local map = {}
+	local type = r.type
+	for name, v in pairs(r.protocol) do
+		local tag = v.tag
+		local request = v.request
+		local response = v.response
+		local p = map[tag]
+
+		if p then
+			error(string.format("redefined protocol tag %d at %s", tag, name))
+		end
+
+		if request and not type[request] then
+			error(string.format("Undefined request type %s in protocol %s", request, name))
+		end
+
+		if response and not type[response] then
+			error(string.format("Undefined response type %s in protocol %s", response, name))
+		end
+
+		map[tag] = v
+	end
+	return r
+end
+
 local function flattypename(r)
 	for typename, t in pairs(r.type) do
 		for _, f in pairs(t) do
@@ -331,9 +357,9 @@ local function packfield(f)
 	local strtbl = {}
 	if f.array then
 		if f.key then
-			table.insert(strtbl, "\6\0")					-- 6 fields
+			table.insert(strtbl, "\6\0")  -- 6 fields
 		else
-			table.insert(strtbl, "\5\0")					-- 5 fields，用一个word来表示fn
+			table.insert(strtbl, "\5\0")  -- 5 fields
 		end
 	else
 		table.insert(strtbl, "\4\0")						-- 4 fields
@@ -473,6 +499,16 @@ local function packgroup(t,p)
 	local alltypes = {}
 	for name in pairs(t) do
 		table.insert(alltypes, name)
+	end
+	table.sort(alltypes)	-- make result stable
+	for idx, name in ipairs(alltypes) do
+		local fields = {}
+		for _, type_fields in ipairs(t[name]) do
+			if buildin_types[type_fields.typename] then
+				fields[type_fields.name] = type_fields.tag
+			end
+		end
+		alltypes[name] = { id = idx - 1, fields = fields }
 	end
 	table.sort(alltypes)	-- make result stable
 	for idx, name in ipairs(alltypes) do

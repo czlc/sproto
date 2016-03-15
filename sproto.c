@@ -244,7 +244,7 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 			tag+= value/2;
 			continue;
 		}
-		if (tag == 0) {	// name
+		if (tag == 0) { // name
 			if (value != 0)
 				return NULL;
 			f->name = import_string(s, stream + fn * SIZEOF_FIELD);
@@ -254,12 +254,12 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 			return NULL;
 		value = value/2 - 1; // 值
 		switch(tag) {
-		case 1:	// buildin
+		case 1: // buildin
 			if (value >= SPROTO_TSTRUCT)
 				return NULL;	// invalid buildin type
 			f->type = value;
 			break;
-		case 2:	// type index
+		case 2: // type index
 			if (value >= s->type_n)
 				return NULL;	// invalid type index
 			if (f->type >= 0)
@@ -267,10 +267,10 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 			f->type = SPROTO_TSTRUCT;
 			f->st = &s->type[value];
 			break;
-		case 3:	// tag
+		case 3: // tag
 			f->tag = value;
 			break;
-		case 4:	// array
+		case 4: // array
 			if (value)
 				array = SPROTO_TARRAY;
 			break;
@@ -292,10 +292,10 @@ import_field(struct sproto *s, struct field *f, const uint8_t * stream) {
 .type {
 	.field {
 		name 0 : string
-		buildin	1 :	integer
+		buildin 1 : integer
 		type 2 : integer
-		tag	3 :	integer
-		array 4	: boolean
+		tag 3 : integer
+		array 4 : boolean
 	}
 	name 0 : string
 	fields 1 : *field
@@ -378,8 +378,8 @@ import_type(struct sproto *s, struct sproto_type *t, const uint8_t * stream) {
 /*
 .protocol {
 	name 0 : string
-	tag	1 :	integer
-	request	2 :	integer
+	tag 1 : integer
+	request 2 : integer
 	response 3 : integer
 }
 */
@@ -421,24 +421,24 @@ import_protocol(struct sproto *s, struct protocol *p, const uint8_t * stream) {
 		}
 		value = value/2 - 1;
 		switch (i) {
-		case 0:	// name
+		case 0: // name
 			if (value != -1) {
 				return NULL;
 			}
 			p->name = import_string(s, stream + SIZEOF_FIELD *fn);
 			break;
-		case 1:	// tag
+		case 1: // tag
 			if (value < 0) {
 				return NULL;
 			}
 			p->tag = value;
 			break;
-		case 2:	// request
+		case 2: // request
 			if (value < 0 || value>=s->type_n)
 				return NULL;
 			p->p[SPROTO_REQUEST] = &s->type[value];
 			break;
-		case 3:	// response
+		case 3: // response
 			if (value < 0 || value>=s->type_n)
 				return NULL;
 			p->p[SPROTO_RESPONSE] = &s->type[value];
@@ -968,7 +968,7 @@ encode_array(sproto_callback cb, struct sproto_arg *args, uint8_t *data, int siz
 		2Byte			:field count
 		2Byte * n		:n个field value
 */
-int 
+int
 sproto_encode(const struct sproto_type *st, void * buffer, int size, sproto_callback cb, void *ud) {
 	struct sproto_arg args;
 	uint8_t * header = (uint8_t *)buffer;
@@ -1019,7 +1019,7 @@ sproto_encode(const struct sproto_type *st, void * buffer, int size, sproto_call
 					// 2个字节可以存放得下，就按value编码直接放到field value处，否则放到data段
 					if (u.u32 < 0x7fff) {
 						value = (u.u32+1) * 2;
-						sz = 2;	// sz can be any number > 0
+						sz = 2; // sz can be any number > 0
 					} else {
 						sz = encode_integer(u.u32, data, size);
 					}

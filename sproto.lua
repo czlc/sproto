@@ -32,6 +32,15 @@ function sproto.sharenew(cobj)
 	return setmetatable(self, sproto_nogc)
 end
 
+function sproto.sharenew(cobj)
+	local self = {
+		__cobj = cobj,
+		__tcache = setmetatable( {} , weak_mt ),
+		__pcache = setmetatable( {} , weak_mt ),
+	}
+	return setmetatable(self, sproto_nogc)
+end
+
 -- 解析协议包字符串并生成协议组对象
 -- 拥有功能：encode,decode,pencode, pdecode
 function sproto.parse(ptext)
@@ -46,7 +55,7 @@ function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
 		__proto = self, -- 协议组对象
-		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"), -- 缓存package类型
+		__package = core.querytype(self.__cobj, packagename),
 		__session = {},
 	}
 	return setmetatable(obj, host_mt)
@@ -186,9 +195,10 @@ end
 local header_tmp = {}
 
 local function gen_response(self, response, session)
-	return function(args)
+	return function(args, ud)
 		header_tmp.type = nil -- type为0表示是response
 		header_tmp.session = session
+		header_tmp.ud = ud
 		local header = core.encode(self.__package, header_tmp)
 		if response then
 			local content = core.encode(response, args)
@@ -204,6 +214,7 @@ function host:dispatch(...)
 	local bin = core.unpack(...)	-- 解包协议
 	header_tmp.type = nil
 	header_tmp.session = nil
+	header_tmp.ud = nil
 	local header, size = core.decode(self.__package, bin, header_tmp) -- 解码协议头
 	local content = bin:sub(size + 1)
 	if header.type then
@@ -214,9 +225,9 @@ function host:dispatch(...)
 			result = core.decode(proto.request, content) -- 解码协议内容
 		end
 		if header_tmp.session then
-			return "REQUEST", proto.name, result, gen_response(self, proto.response, header_tmp.session)
+			return "REQUEST", proto.name, result, gen_response(self, proto.response, header_tmp.session), header.ud
 		else
-			return "REQUEST", proto.name, result
+			return "REQUEST", proto.name, result, nil, header.ud
 		end
 	else
 		-- response
@@ -224,10 +235,10 @@ function host:dispatch(...)
 		local response = assert(self.__session[session], "Unknown session")
 		self.__session[session] = nil
 		if response == true then
-			return "RESPONSE", session
+			return "RESPONSE", session, nil, header.ud
 		else
 			local result = core.decode(response, content)
-			return "RESPONSE", session, result
+			return "RESPONSE", session, result, header.ud
 		end
 	end
 end
@@ -235,10 +246,11 @@ end
 -- 创建协议发生器，sp是对方的协议组对象
 function host:attach(sp)
 	-- name 是协议名
-	return function(name, args, session)
+	return function(name, args, session, ud)
 		local proto = queryproto(sp, name)	-- 获得协议对象
 		header_tmp.type = proto.tag
 		header_tmp.session = session
+		header_tmp.ud = ud
 		local header = core.encode(self.__package, header_tmp)
 
 		if session then
