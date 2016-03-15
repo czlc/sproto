@@ -628,100 +628,6 @@ static struct sproto * G_sproto[MAX_GLOBALSPROTO];
 
 static int
 lsaveproto(lua_State *L) {
-	struct sproto * sp = lua_touserdata(L, 1);
-	int index = luaL_optinteger(L, 2, 0);
-	if (index < 0 || index >= MAX_GLOBALSPROTO) {
-		return luaL_error(L, "Invalid global slot index %d", index);
-	}
-	/* TODO : release old object (memory leak now, but thread safe)*/
-	G_sproto[index] = sp;
-	return 0;
-}
-
-static int
-lloadproto(lua_State *L) {
-	int index = luaL_optinteger(L, 1, 0);
-	struct sproto * sp;
-	if (index < 0 || index >= MAX_GLOBALSPROTO) {
-		return luaL_error(L, "Invalid global slot index %d", index);
-	}
-	sp = G_sproto[index];
-	if (sp == NULL) {
-		return luaL_error(L, "nil sproto at index %d", index);
-	}
-
-	lua_pushlightuserdata(L, sp);
-
-	return 1;
-}
-
-static int
-encode_default(const struct sproto_arg *args) {
-	lua_State *L = args->ud;
-	lua_pushstring(L, args->tagname);
-	if (args->index > 0) {
-		lua_newtable(L);
-	} else {
-		switch(args->type) {
-		case SPROTO_TINTEGER:
-			lua_pushinteger(L, 0);
-			break;
-		case SPROTO_TBOOLEAN:
-			lua_pushboolean(L, 0);
-			break;
-		case SPROTO_TSTRING:
-			lua_pushliteral(L, "");
-			break;
-		case SPROTO_TSTRUCT:
-			lua_createtable(L, 0, 1);
-			lua_pushstring(L, sproto_name(args->subtype));
-			lua_setfield(L, -2, "__type");
-			break;
-		}
-	}
-	lua_rawset(L, -3);
-	return 0;
-}
-
-/*
-	lightuserdata sproto_type
-	return default table
- */
-static int
-ldefault(lua_State *L) {
-	int ret;
-	// 64 is always enough for dummy buffer, except the type has many fields ( > 27).
-	char dummy[64];
-	struct sproto_type * st = lua_touserdata(L, 1);
-	if (st == NULL) {
-		return luaL_argerror(L, 1, "Need a sproto_type object");
-	}
-	lua_newtable(L);
-	ret = sproto_encode(st, dummy, sizeof(dummy), encode_default, L);
-	if (ret<0) {
-		// try again
-		int sz = sizeof(dummy) * 2;
-		void * tmp = lua_newuserdata(L, sz);
-		lua_insert(L, -2);
-		for (;;) {
-			ret = sproto_encode(st, tmp, sz, encode_default, L);
-			if (ret >= 0)
-				break;
-			sz *= 2;
-			tmp = lua_newuserdata(L, sz);
-			lua_replace(L, -3);
-		}
-	}
-	return 1;
-}
-
-/* global sproto pointer for multi states
-   NOTICE : It is not thread safe
- */
-static struct sproto * G_sproto[MAX_GLOBALSPROTO];
-
-static int
-lsaveproto(lua_State *L) {
 	struct sproto * sp = (struct sproto *)lua_touserdata(L, 1);
 	int index = luaL_optinteger(L, 2, 0);
 	if (index < 0 || index >= MAX_GLOBALSPROTO) {
@@ -808,6 +714,7 @@ ldefault(lua_State *L) {
 	}
 	return 1;
 }
+
 
 #ifdef _MSC_VER
 #define SPROTO_API __declspec(dllexport)

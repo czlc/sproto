@@ -32,15 +32,6 @@ function sproto.sharenew(cobj)
 	return setmetatable(self, sproto_nogc)
 end
 
-function sproto.sharenew(cobj)
-	local self = {
-		__cobj = cobj,
-		__tcache = setmetatable( {} , weak_mt ),
-		__pcache = setmetatable( {} , weak_mt ),
-	}
-	return setmetatable(self, sproto_nogc)
-end
-
 -- 解析协议包字符串并生成协议组对象
 -- 拥有功能：encode,decode,pencode, pdecode
 function sproto.parse(ptext)
@@ -55,7 +46,7 @@ function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
 		__proto = self, -- 协议组对象
-		__package = core.querytype(self.__cobj, packagename),
+		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"),
 		__session = {},
 	}
 	return setmetatable(obj, host_mt)

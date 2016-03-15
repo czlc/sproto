@@ -23,8 +23,8 @@ local sp = sproto.parse [[
 ]]
 
 -- core.dumpproto only for debug use
-core.dumpproto(sp.__cobj)
-
+--core.dumpproto(sp.__cobj)
+--[[
 local def = sp:default "Person"
 print("default table for Person")
 print_r(def)
@@ -64,3 +64,4 @@ collectgarbage "stop"
 local code = sp:encode("AddressBook", ab)
 local addr = sp:decode("AddressBook", code)
 print_r(addr)
+--]]

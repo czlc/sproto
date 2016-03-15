@@ -261,32 +261,6 @@ local function check_protocol(r)
 	return r
 end
 
-local function check_protocol(r)
-	local map = {}
-	local type = r.type
-	for name, v in pairs(r.protocol) do
-		local tag = v.tag
-		local request = v.request
-		local response = v.response
-		local p = map[tag]
-
-		if p then
-			error(string.format("redefined protocol tag %d at %s", tag, name))
-		end
-
-		if request and not type[request] then
-			error(string.format("Undefined request type %s in protocol %s", request, name))
-		end
-
-		if response and not type[response] then
-			error(string.format("Undefined response type %s in protocol %s", response, name))
-		end
-
-		map[tag] = v
-	end
-	return r
-end
-
 local function flattypename(r)
 	for typename, t in pairs(r.type) do
 		for _, f in pairs(t) do
@@ -375,7 +349,7 @@ local function packfield(f)
 		table.insert(strtbl, packvalue(f.tag))				-- tag (tag = 3)
 	end
 	if f.array then
-		table.insert(strtbl, packvalue(1))					-- array (tag = 4)
+		table.insert(strtbl, packvalue(1))	-- array = true (tag = 4)
 	end
 	if f.key then
 		table.insert(strtbl, packvalue(f.key))				-- key tag (tag = 5)
@@ -510,16 +484,6 @@ local function packgroup(t,p)
 		end
 		alltypes[name] = { id = idx - 1, fields = fields }
 	end
-	table.sort(alltypes)	-- make result stable
-	for idx, name in ipairs(alltypes) do
-		local fields = {}
-		for _, type_fields in ipairs(t[name]) do
-			if buildin_types[type_fields.typename] then
-				fields[type_fields.name] = type_fields.tag
-			end
-		end
-		alltypes[name] = { id = idx - 1, fields = fields }
-	end
 	tt = {}
 	for _,name in ipairs(alltypes) do
 		table.insert(tt, packtype(name, t[name], alltypes))
@@ -581,10 +545,12 @@ function sparser.dump(str)
 	end
 	print(tmp)
 end
+local print_r = require "print_r"
 
 -- 解析类型组、协议组，并将解析结果打包成字符串格式
 function sparser.parse(text, name)
 	local r = parser(text, name or "=text")
+	print_r(r)
 	local data = encodeall(r)
 	return data
 end
