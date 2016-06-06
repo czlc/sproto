@@ -57,7 +57,7 @@ local client = client_proto:host "package"
 local client_request = client:attach(server_proto)
 
 print("client request foobar")
-local req = client_request("foobar", { what = "foo" }, 1)
+local req = client_request("foobar", { what = "foo" }, 1)	-- 1 ÊÇsisson
 print("request foobar size =", #req)
 local type, name, request, response = server:dispatch(req)
 assert(type == "REQUEST" and name == "foobar")

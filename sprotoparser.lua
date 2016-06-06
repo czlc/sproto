@@ -550,7 +550,6 @@ local print_r = require "print_r"
 -- 解析类型组、协议组，并将解析结果打包成字符串格式
 function sparser.parse(text, name)
 	local r = parser(text, name or "=text")
-	print_r(r)
 	local data = encodeall(r)
 	return data
 end

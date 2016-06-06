@@ -22,10 +22,10 @@ struct field {
 
 struct sproto_type {
 	const char * name;
-	int n;	// filed count
-	int base; // 起始tag
+	int n;					// filed count
+	int base;				// 起始tag
 	int maxn;
-	struct field *f;
+	struct field *f;		// filed array
 };
 
 struct protocol {
