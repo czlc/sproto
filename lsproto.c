@@ -151,7 +151,7 @@ encode(const struct sproto_arg *args) {
 					lua_replace(L, self->array_index);
 				}
 				self->array_index = 0;
-				return 0;
+				return SPROTO_CB_NOARRAY;
 			}
 			if (!lua_istable(L, -1)) {
 				return luaL_error(L, ".*%s(%d) should be a table (Is a %s)",
@@ -173,7 +173,7 @@ encode(const struct sproto_arg *args) {
 				// iterate end
 				lua_pushnil(L);
 				lua_replace(L, self->iter_index);
-				return 0;
+				return SPROTO_CB_NIL;
 			}
 			lua_insert(L, -2);
 			lua_replace(L, self->iter_index);
@@ -187,7 +187,7 @@ encode(const struct sproto_arg *args) {
 	if (lua_isnil(L, -1)) {
 		// 如果table中没有找到填相关数据
 		lua_pop(L,1);
-		return 0;
+		return SPROTO_CB_NIL;
 	}
 	switch (args->type) {
 	case SPROTO_TINTEGER: {
@@ -231,10 +231,10 @@ encode(const struct sproto_arg *args) {
 			str = lua_tolstring(L, -1, &sz);
 		}
 		if (sz > args->length)
-			return -1;
+			return SPROTO_CB_ERROR;
 		memcpy(args->value, str, sz);
 		lua_pop(L,1);
-		return sz + 1;	// The length of empty string is 1.
+		return sz;
 	}
 	case SPROTO_TSTRUCT: {
 		struct encode_ud sub;
@@ -254,6 +254,8 @@ encode(const struct sproto_arg *args) {
 		sub.iter_index = sub.tbl_index + 1;
 		r = sproto_encode(args->subtype, args->value, args->length, encode, &sub);
 		lua_settop(L, top-1);	// pop the value
+		if (r < 0) 
+			return SPROTO_CB_ERROR;
 		return r;
 	}
 	default:
@@ -368,7 +370,7 @@ decode(const struct sproto_arg *args) {
 	lua_State *L = self->L;
 	if (self->deep >= ENCODE_DEEPLEVEL)
 		return luaL_error(L, "The table is too deep");
-	if (args->index > 0) {
+	if (args->index != 0) {
 		// It's array
 		if (args->tagname != self->array_tag) {
 			self->array_tag = args->tagname;
@@ -379,6 +381,10 @@ decode(const struct sproto_arg *args) {
 				lua_replace(L, self->array_index);
 			} else {
 				self->array_index = lua_gettop(L);
+			}
+			if (args->index < 0) {
+				// It's a empty array, return now.
+				return 0;
 			}
 		}
 	}
@@ -414,9 +420,10 @@ decode(const struct sproto_arg *args) {
 			sub.key_index = lua_gettop(L);
 
 			r = sproto_decode(args->subtype, args->value, args->length, decode, &sub);
-			if (r < 0 || r != args->length)
+			if (r < 0)
+				return SPROTO_CB_ERROR;
+			if (r != args->length)
 				return r;
-			// assert(args->index > 0);
 			lua_pushvalue(L, sub.key_index);
 			if (lua_isnil(L, -1)) {
 				luaL_error(L, "Can't find main index (tag=%d) in [%s]", args->mainindex, args->tagname);
@@ -429,7 +436,9 @@ decode(const struct sproto_arg *args) {
 			sub.mainindex_tag = -1;
 			sub.key_index = 0;
 			r = sproto_decode(args->subtype, args->value, args->length, decode, &sub);
-			if (r < 0 || r != args->length)
+			if (r < 0)
+				return SPROTO_CB_ERROR;
+			if (r != args->length)
 				return r;
 			lua_settop(L, sub.result_index);
 			break;
@@ -614,6 +623,9 @@ lprotocol(lua_State *L) {
 	} else {
 		// 根据name查找
 		const char * name = lua_tostring(L, 2);
+		if (name == NULL) {
+			return luaL_argerror(L, 2, "Should be number or string");
+		}
 		tag = sproto_prototag(sp, name);
 		if (tag < 0)
 			return 0;
@@ -676,6 +688,8 @@ encode_default(const struct sproto_arg *args) {
 	lua_pushstring(L, args->tagname);
 	if (args->index > 0) {
 		lua_newtable(L);
+		lua_rawset(L, -3);
+		return SPROTO_CB_NOARRAY;
 	} else {
 		switch(args->type) {
 		case SPROTO_TINTEGER:
@@ -693,9 +707,9 @@ encode_default(const struct sproto_arg *args) {
 			lua_setfield(L, -2, "__type");
 			break;
 		}
+		lua_rawset(L, -3);
+		return SPROTO_CB_NIL;
 	}
-	lua_rawset(L, -3);
-	return 0;
 }
 
 /*
