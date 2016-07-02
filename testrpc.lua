@@ -1,6 +1,7 @@
 local sproto = require "sproto"
 local print_r = require "print_r"
 
+-- 一对应答组成一个协议，有协议名，协议id
 local server_proto = sproto.parse [[
 .package {
 	type 0 : integer
@@ -57,9 +58,9 @@ local client = client_proto:host "package"
 local client_request = client:attach(server_proto)
 
 print("client request foobar")
-local req = client_request("foobar", { what = "foo" }, 1)	-- 1 是sisson
+local req = client_request("foobar", { what = "foo" }, 1)	-- 打包请求，得到一个chunk req
 print("request foobar size =", #req)
-local type, name, request, response = server:dispatch(req)
+local type, name, request, response = server:dispatch(req)	-- 服务端解包
 assert(type == "REQUEST" and name == "foobar")
 print_r(request)
 print("server response")

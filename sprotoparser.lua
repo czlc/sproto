@@ -333,7 +333,7 @@ local function packfield(f)
 		if f.key then
 			table.insert(strtbl, "\6\0")  -- 6 fields
 		else
-			table.insert(strtbl, "\5\0")  -- 5 fields
+			table.insert(strtbl, "\5\0")					-- 5 fields，用一个word来表示fn
 		end
 	else
 		table.insert(strtbl, "\4\0")						-- 4 fields

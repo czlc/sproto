@@ -60,6 +60,7 @@ static lua_Integer lua_tointegerx(lua_State *L, int idx, int *isnum) {
 
 #endif
 
+/* 读入解析出来的bin，生成程序定义的结构，并将其以lightuserdata的形式压入 */
 static int
 lnewproto(lua_State *L) {
 	struct sproto * sp;
@@ -139,6 +140,7 @@ encode(const struct sproto_arg *args) {
 		return luaL_error(L, "The table is too deep");
 	if (args->index > 0) {
 		if (args->tagname != self->array_tag) {
+			// 如果不是当前数组，说明self->array_index需要更新
 			// a new array
 			self->array_tag = args->tagname;
 			lua_getfield(L, self->tbl_index, args->tagname);
@@ -533,10 +535,19 @@ ldumpproto(lua_State *L) {
 	string source	/  (lightuserdata , integer)
 	return string
  */
+/*
+	功能：
+		使得数据包更加紧凑
+		
+	参数：
+
+	返回：
+
+*/
 static int
 lpack(lua_State *L) {
 	size_t sz=0;
-	const void * buffer = getbuffer(L, 1, &sz);
+	const void * buffer = getbuffer(L, 1, &sz);		// 被打包的目标数据
 	// the worst-case space overhead of packing is 2 bytes per 2 KiB of input (256 words = 2KiB).
 	size_t maxsz = (sz + 2047) / 2048 * 2 + sz + 2;
 	void * output = lua_touserdata(L, lua_upvalueindex(1));
@@ -593,6 +604,7 @@ lprotocol(lua_State *L) {
 	}
 	t = lua_type(L,2);
 	if (t == LUA_TNUMBER) {
+		// 根据tag查找
 		const char * name;
 		tag = lua_tointeger(L, 2);
 		name = sproto_protoname(sp, tag);
@@ -600,18 +612,21 @@ lprotocol(lua_State *L) {
 			return 0;
 		lua_pushstring(L, name);
 	} else {
+		// 根据name查找
 		const char * name = lua_tostring(L, 2);
 		tag = sproto_prototag(sp, name);
 		if (tag < 0)
 			return 0;
 		lua_pushinteger(L, tag);
 	}
+	// 查找请求
 	request = sproto_protoquery(sp, tag, SPROTO_REQUEST);
 	if (request == NULL) {
 		lua_pushnil(L);
 	} else {
 		lua_pushlightuserdata(L, request);
 	}
+	// 查找应答
 	response = sproto_protoquery(sp, tag, SPROTO_RESPONSE);
 	if (response == NULL) {
 		lua_pushnil(L);

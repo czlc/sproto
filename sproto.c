@@ -44,6 +44,7 @@ struct pool {
 	int current_used;
 };
 
+/* sproto对象 */
 struct sproto {
 	struct pool memory;				// 内存池
 	int type_n;						// type count
@@ -455,6 +456,7 @@ import_protocol(struct sproto *s, struct protocol *p, const uint8_t * stream) {
 	return result;
 }
 
+/* 解析textbin 读入到sproto 结构 */
 static struct sproto *
 create_from_bundle(struct sproto *s, const uint8_t * stream, size_t sz) {
 	const uint8_t * content;
@@ -462,7 +464,7 @@ create_from_bundle(struct sproto *s, const uint8_t * stream, size_t sz) {
 	const uint8_t * protocoldata = NULL;
 	int fn = struct_field(stream, sz);
 	int i;
-	if (fn < 0 || fn > 2)
+	if (fn < 0 || fn > 2)	// 类型数组和协议数组
 		return NULL;
 
 	stream += SIZEOF_HEADER;
@@ -1180,7 +1182,7 @@ decode_array(sproto_callback cb, struct sproto_arg *args, uint8_t * stream) {
 		ud				:杂项参数
 
 	返回：
-		
+		用掉的内存
 */
 int
 sproto_decode(const struct sproto_type *st, const void * data, int size, sproto_callback cb, void *ud) {
@@ -1340,6 +1342,7 @@ write_ff(const uint8_t * src, uint8_t * des, int n) {
 	}
 }
 
+/* srcv 原数据, srcsz:原数据大小，bufferv:目标缓存， bufsz:缓存大小 */
 int
 sproto_pack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	uint8_t tmp[8];

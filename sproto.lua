@@ -33,8 +33,8 @@ function sproto.sharenew(cobj)
 	return setmetatable(self, sproto_nogc)
 end
 
--- 解析协议包字符串并生成协议组对象
--- 拥有功能：encode,decode,pencode, pdecode
+-- 解析协议包字符串并，将其导入到c结构中，并生成相应的协议组对象(userdata)
+-- 挂接mt之后拥有功能：encode,decode,pencode, pdecode
 function sproto.parse(ptext)
 	local parser = require "sprotoparser"
 	local pbin = parser.parse(ptext)
@@ -47,13 +47,14 @@ function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
 		__proto = self, -- 协议组对象
-		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"),
+		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"), -- 缓存package类型
 		__session = {},
 	}
 	return setmetatable(obj, host_mt)
 end
 
 -- queries a type object from a sproto object by typename.
+-- 返回type 它是lightuserdata类型
 local function querytype(self, typename)
 	local v = self.__tcache[typename]
 	if not v then
@@ -96,10 +97,11 @@ function sproto:pdecode(typename, ...)
 	return core.decode(st, core.unpack(...))
 end
 
+-- pname是协议名，包括一对请求和应答的协议
 local function queryproto(self, pname)
 	local v = self.__pcache[pname]
 	if not v then
-		local tag, req, resp = core.protocol(self.__cobj, pname)
+		local tag, req, resp = core.protocol(self.__cobj, pname)	-- tag, 请求lightuserdata，应答lightuserdata
 		assert(tag, pname .. " not found")
 		if tonumber(pname) then
 			pname, tag = tag, pname
@@ -127,6 +129,7 @@ function sproto:exist_proto(pname)
 	end
 end
 
+-- protoname是协议名
 function sproto:request_encode(protoname, tbl)
 	local p = queryproto(self, protoname)
 	local request = p.request
@@ -207,6 +210,7 @@ local function gen_response(self, response, session)
 end
 
 -- 处理对方发来的请求
+-- 返回type, name, 
 function host:dispatch(...)
 	local bin = core.unpack(...)	-- 解包协议
 	header_tmp.type = nil
@@ -223,13 +227,14 @@ function host:dispatch(...)
 			result = core.decode(proto.request, content) -- 解码协议内容
 		end
 		if header_tmp.session then
-			-- request 确定了则应答也就确定了
+			-- request 确定了则应答函数也就确定了
 			return "REQUEST", proto.name, result, gen_response(self, proto.response, header_tmp.session), header.ud
 		else
 			return "REQUEST", proto.name, result, nil, header.ud
 		end
 	else
 		-- response
+		-- 收到对方应答
 		local session = assert(header_tmp.session, "session not found")
 		local response = assert(self.__session[session], "Unknown session")
 		self.__session[session] = nil
@@ -244,7 +249,7 @@ end
 
 -- 创建协议发生器，sp是对方的协议组对象，这样就能根据对方要求的协议格式打包请求
 function host:attach(sp)
-	-- 此函数返回打包好的请求
+	-- 此函数返回打包好的请求， session是会话id，表明是否需要回应
 	return function(name, args, session, ud)
 		local proto = queryproto(sp, name)	-- 获得协议对象
 		header_tmp.type = proto.tag
