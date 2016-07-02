@@ -548,6 +548,9 @@ end
 local print_r = require "print_r"
 
 -- 解析类型组、协议组，并将解析结果打包成字符串格式
+-- parses a sproto schema to a binary string
+-- You can use it to generate binary string offline. The schema text
+-- and the parser is not needed when your program is running.
 function sparser.parse(text, name)
 	local r = parser(text, name or "=text")
 	local data = encodeall(r)
