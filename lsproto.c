@@ -2,8 +2,11 @@
 #include <stdlib.h>
 #include "msvcint.h"
 
+extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
+};
+
 #include "sproto.h"
 
 #define MAX_GLOBALSPROTO 16
