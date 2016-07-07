@@ -48,7 +48,7 @@ function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
 		__proto = self, -- 协议组对象
-		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"), -- 协议头
+		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"), -- 协议头类型
 		__session = {},
 	}
 	return setmetatable(obj, host_mt)
