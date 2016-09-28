@@ -42,16 +42,19 @@ function sproto.parse(ptext)
 	return sproto.new(pbin)
 end
 
--- 创建protocol processor
--- 拥有attach，dispatch功能
+-- 配置好协议处理对象(可以打包request和解包respone)
+-- 本方协议，需要peer遵守
 function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
-		__proto = self, -- 协议组对象
-		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"), -- 协议头类型
+		-- self是sproto.new(pbin)出来的sp对象
+		__proto = self,
+		-- 协议头类型，各个协议都带有它
+		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"),
+		-- 用于匹配reques相应的respond(保存的是respone的类型)
 		__session = {},
 	}
-	return setmetatable(obj, host_mt)
+	return setmetatable(obj, host_mt)	-- host_mt 使其有打包和解包能力
 end
 
 -- queries a type object from a sproto object by typename.
@@ -99,20 +102,20 @@ function sproto:pdecode(typename, ...)
 end
 
 
--- 查找pnam(协议名或者协议tag)指定的协议request和response类型对象
+-- 查找协议名pname，查找协议详细信息
 local function queryproto(self, pname)
 	local v = self.__pcache[pname]
 	if not v then
-		local tag, req, resp = core.protocol(self.__cobj, pname)	-- tag, 请求lightuserdata，应答lightuserdata
+		local tag, req, resp = core.protocol(self.__cobj, pname)	-- tag, 请求type，应答type
 		assert(tag, pname .. " not found")
 		if tonumber(pname) then
 			pname, tag = tag, pname
 		end
 		v = {
-			request = req,
-			response =resp,
-			name = pname,
-			tag = tag,
+			request = req,	-- 请求type(lightuserdata)
+			response =resp,	-- 应答type(lightuserdata)
+			name = pname,	-- 协议名
+			tag = tag,		-- 协议tag
 		}
 		self.__pcache[pname] = v
 		self.__pcache[tag]  = v
@@ -152,6 +155,7 @@ function sproto:response_encode(protoname, tbl)
 	end
 end
 
+-- 根据类型名protoname，解码...
 function sproto:request_decode(protoname, ...)
 	local p = queryproto(self, protoname)
 	local request = p.request
@@ -212,25 +216,24 @@ local function gen_response(self, response, session)
 	end
 end
 
--- 处理对方发来的请求
+-- 处理对方发来的request或者response
 -- retuen "REQUEST", 请求类型名，请求内容,
 -- return "RESPONSE"
 function host:dispatch(...)
-	local bin = core.unpack(...)	-- 解包请求内容协议
+	local bin = core.unpack(...)
 	header_tmp.type = nil
 	header_tmp.session = nil
 	header_tmp.ud = nil
 	local header, size = core.decode(self.__package, bin, header_tmp) -- 解码协议头
 	local content = bin:sub(size + 1)	-- 去掉头，剩下具体内容
-	if header.type then	-- type是请求类型
+	if header.type then	-- type是请求类型tag，若无type表示应答
 		-- request
-		local proto = queryproto(self.__proto, header.type) -- 获得协议对象，包括请求和应答类型, name, tag
+		local proto = queryproto(self.__proto, header.type) -- 根据协议类型header.type得到此type协议具体情况
 		local result
 		if proto.request then
 			result = core.decode(proto.request, content) -- 解码请求协议内容
 		end
-		if header_tmp.session then
-			-- request 确定了则应答函数也就确定了
+		if header_tmp.session then	-- 需要应答
 			return "REQUEST", proto.name, result, gen_response(self, proto.response, header_tmp.session), header.ud
 		else
 			return "REQUEST", proto.name, result, nil, header.ud
@@ -250,16 +253,21 @@ function host:dispatch(...)
 	end
 end
 
--- 返回一个协议打包器, sp是对方的协议
+-- 关联对方协议sp，用于发送请求
 function host:attach(sp)
-	-- 调用打包器，name是协议名，args是协议table，返回打包好的请求， session是会话id，表明是否需要回应
+	-- 调用打包器，将返回打包好的请求
+	-- name是协议名
+	-- args是协议table，
+	-- session是会话id，如果需要应答则需要这个参数，否则可以设置为nil
+	-- ud是一个用户定义字符串可以用于返回error msg，这样就不用在每个协议中增加这么一项
 	return function(name, args, session, ud)
-		local proto = queryproto(sp, name)	-- 获得协议对象
+		local proto = queryproto(sp, name)	-- 根据对方协议名获得协议类型对象
 		header_tmp.type = proto.tag
 		header_tmp.session = session
 		header_tmp.ud = ud
 		local header = core.encode(self.__package, header_tmp)	-- 编码协议头
 
+		-- session保存response的type
 		if session then
 			self.__session[session] = proto.response or true
 		end
