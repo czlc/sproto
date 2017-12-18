@@ -1,5 +1,4 @@
 local core = require "sproto.core"
-local print_r = require "print_r"
 local assert = assert
 
 local sproto = {}
@@ -272,7 +271,7 @@ function host:attach(sp)
 			self.__session[session] = proto.response or true
 		end
 
-		if args then
+		if proto.request then
 			local content = core.encode(proto.request, args) -- 编码协议内容
 			return core.pack(header ..  content) -- 打包整个协议数据
 		else
