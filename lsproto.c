@@ -1,12 +1,11 @@
+#define LUA_LIB
+
 #include <string.h>
 #include <stdlib.h>
 #include "msvcint.h"
 
-extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
-};
-
 #include "sproto.h"
 
 #define MAX_GLOBALSPROTO 16
@@ -45,10 +44,10 @@ LUALIB_API void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
 #if LUA_VERSION_NUM < 503
 
 #if LUA_VERSION_NUM < 502
-static lua_Integer lua_tointegerx(lua_State *L, int idx, int *isnum) {
+static int64_t lua_tointegerx(lua_State *L, int idx, int *isnum) {
 	if (lua_isnumber(L, idx)) {
 		if (isnum) *isnum = 1;
-		return lua_tointeger(L, idx);
+		return (int64_t)lua_tointeger(L, idx);
 	}
 	else {
 		if (isnum) *isnum = 0;
@@ -201,13 +200,20 @@ encode(const struct sproto_arg *args) {
 	}
 	switch (args->type) {
 	case SPROTO_TINTEGER: {
-		lua_Integer v;
+		int64_t v;
 		lua_Integer vh;
 		int isnum;
-		v = lua_tointegerx(L, -1, &isnum);
-		if(!isnum) {
-			return luaL_error(L, ".%s[%d] is not an integer (Is a %s)", 
-				args->tagname, args->index, lua_typename(L, lua_type(L, -1)));
+		if (args->extra) {
+			// It's decimal.
+			lua_Number vn = lua_tonumber(L, -1);
+			// use 64bit integer for 32bit architecture.
+			v = (int64_t)(vn * args->extra + 0.5);
+		} else {
+			v = lua_tointegerx(L, -1, &isnum);
+			if(!isnum) {
+				return luaL_error(L, ".%s[%d] is not an integer (Is a %s)", 
+					args->tagname, args->index, lua_typename(L, lua_type(L, -1)));
+			}
 		}
 		lua_pop(L,1);
 		// notice: in lua 5.2, lua_Integer maybe 52bit
@@ -292,9 +298,11 @@ expand_buffer(lua_State *L, int osz, int nsz) {
 }
 
 /*
-**	msg = sproto.encode(st, luatable)
-**	encodes a lua table by a type object, and generates a string message
-*/
+	lightuserdata sproto_type
+	table source
+
+	return string
+ */
 static int
 lencode(lua_State *L) {
 	struct encode_ud self;
@@ -303,7 +311,9 @@ lencode(lua_State *L) {
 	int tbl_index = 2;
 	struct sproto_type * st = (struct sproto_type *)lua_touserdata(L, 1);
 	if (st == NULL) {
-		return luaL_argerror(L, 1, "Need a sproto_type object");
+		luaL_checktype(L, tbl_index, LUA_TNIL);
+		lua_pushstring(L, "");
+		return 1;	// response nil
 	}
 	luaL_checktype(L, tbl_index, LUA_TTABLE);
 	luaL_checkstack(L, ENCODE_DEEPLEVEL*2 + 8, NULL);
@@ -388,8 +398,16 @@ decode(const struct sproto_arg *args) {
 	switch (args->type) {
 	case SPROTO_TINTEGER: {
 		// notice: in lua 5.2, 52bit integer support (not 64)
-		lua_Integer v = *(uint64_t*)args->value;
-		lua_pushinteger(L, v);
+		if (args->extra) {
+			// lua_Integer is 32bit in small lua.
+			int64_t v = *(int64_t*)args->value;
+			lua_Number vn = (lua_Number)v;
+			vn /= args->extra;
+			lua_pushnumber(L, vn);
+		} else {
+			int64_t v = *(int64_t*)args->value;
+			lua_pushinteger(L, v);
+		}
 		break;
 	}
 	case SPROTO_TBOOLEAN: {
@@ -489,7 +507,8 @@ ldecode(lua_State *L) {
 	size_t sz;
 	int r;
 	if (st == NULL) {
-		return luaL_argerror(L, 1, "Need a sproto_type object");
+		// return nil
+		return 0;
 	}
 	sz = 0;
 	buffer = getbuffer(L, 2, &sz);
@@ -630,7 +649,11 @@ lprotocol(lua_State *L) {
 	// ²éÕÒÓ¦´ð
 	response = sproto_protoquery(sp, tag, SPROTO_RESPONSE);
 	if (response == NULL) {
-		lua_pushnil(L);
+		if (sproto_protoresponse(sp, tag)) {
+			lua_pushlightuserdata(L, NULL);	// response nil
+		} else {
+			lua_pushnil(L);
+		}
 	} else {
 		lua_pushlightuserdata(L, response);
 	}
@@ -671,17 +694,14 @@ lloadproto(lua_State *L) {
 	return 1;
 }
 
-static int
-encode_default(const struct sproto_arg *args) {
-	lua_State *L = (lua_State *)args->ud;
-	lua_pushstring(L, args->tagname);
-	if (args->index > 0) {
-		lua_newtable(L);
-		lua_rawset(L, -3);
-		return SPROTO_CB_NOARRAY;
-	} else {
-		switch(args->type) {
-		case SPROTO_TINTEGER:
+static void
+push_default(const struct sproto_arg *args, int array) {
+	lua_State *L = args->ud;
+	switch(args->type) {
+	case SPROTO_TINTEGER:
+		if (args->extra)
+			lua_pushnumber(L, 0.0);
+		else
 			lua_pushinteger(L, 0);
 			break;
 		case SPROTO_TBOOLEAN:
@@ -694,8 +714,26 @@ encode_default(const struct sproto_arg *args) {
 			lua_createtable(L, 0, 1);
 			lua_pushstring(L, sproto_name(args->subtype));
 			lua_setfield(L, -2, "__type");
-			break;
 		}
+		break;
+	default:
+		luaL_error(L, "Invalid type %d", args->type);
+		break;
+	}
+}
+
+static int
+encode_default(const struct sproto_arg *args) {
+	lua_State *L = args->ud;
+	lua_pushstring(L, args->tagname);
+	if (args->index > 0) {
+		lua_newtable(L);
+		push_default(args, 1);
+		lua_setfield(L, -2, "__array");
+		lua_rawset(L, -3);
+		return SPROTO_CB_NOARRAY;
+	} else {
+		push_default(args, 0);
 		lua_rawset(L, -3);
 		return SPROTO_CB_NIL;
 	}
@@ -733,18 +771,7 @@ ldefault(lua_State *L) {
 	return 1;
 }
 
-
-#ifdef _MSC_VER
-#define SPROTO_API __declspec(dllexport)
-#else
-#define SPROTO_API __declspec(dllexport)
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-SPROTO_API int
+LUAMOD_API int
 luaopen_sproto_core(lua_State *L) {
 #ifdef luaL_checkversion
 	luaL_checkversion(L);
@@ -767,7 +794,3 @@ luaopen_sproto_core(lua_State *L) {
 	pushfunction_withbuffer(L, "unpack", lunpack);
 	return 1;
 }
-
-#ifdef __cplusplus
-}
-#endif
