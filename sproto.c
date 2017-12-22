@@ -631,7 +631,7 @@ sproto_dump(struct sproto *s) {
 	}
 }
 
-// query
+// query protocol 根据 name 得到 tag
 int
 sproto_prototag(const struct sproto *sp, const char * name) {
 	int i;
@@ -661,6 +661,9 @@ query_proto(const struct sproto *sp, int tag) {
 	return NULL;
 }
 
+/* 根据protocl 的 tag 得到协议类型
+   what 0 表示 request, 1 表示 response
+*/
 struct sproto_type *
 sproto_protoquery(const struct sproto *sp, int proto, int what) {
 	struct protocol * p;
@@ -680,6 +683,7 @@ sproto_protoresponse(const struct sproto * sp, int proto) {
 	return (p!=NULL && (p->p[SPROTO_RESPONSE] || p->confirm));
 }
 
+/* protocol 根据 tag 得到 name */
 const char *
 sproto_protoname(const struct sproto *sp, int proto) {
 	struct protocol * p = query_proto(sp, proto);
@@ -689,6 +693,7 @@ sproto_protoname(const struct sproto *sp, int proto) {
 	return NULL;
 }
 
+/* Query the type object from a sproto object */
 struct sproto_type *
 sproto_type(const struct sproto *sp, const char * type_name) {
 	int i;
@@ -1415,7 +1420,10 @@ write_ff(const uint8_t * src, uint8_t * des, int n) {
 	}
 }
 
-/* srcv 原数据, srcsz:原数据大小，bufferv:目标缓存， bufsz:缓存大小 */
+/*
+** pack the message with the 0 packing algorithm.
+** srcv 原数据, srcsz:原数据大小，bufferv:目标缓存， bufsz:缓存大小
+*/
 int
 sproto_pack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	uint8_t tmp[8];
@@ -1473,6 +1481,9 @@ sproto_pack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	return size;
 }
 
+/*
+** unpack the message with the 0 packing algorithm.
+*/
 int
 sproto_unpack(const void * srcv, int srcsz, void * bufferv, int bufsz) {
 	const uint8_t * src = (const uint8_t *)srcv;
