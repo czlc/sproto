@@ -48,9 +48,9 @@ end
 function sproto:host( packagename )
 	packagename = packagename or  "package"
 	local obj = {
-		-- self是sproto.new(pbin)出来的sp对象
+		-- self是sproto.new(pbin)出来的sp对象，为了处理对方协议
 		__proto = self,
-		-- 协议头类型，各个协议都带有它
+		-- 协议头类型，各个协议都带有它，双方都是基于它
 		__package = assert(core.querytype(self.__cobj, packagename), "type package not found"),
 		-- 用于匹配reques相应的respond(保存的是respone的类型)
 		__session = {},
@@ -256,7 +256,7 @@ function host:dispatch(...)
 	end
 end
 
--- 关联对方协议sp，用于发送请求(主动)
+-- 关联本方协议sp，用于发送请求(主动)
 function host:attach(sp)
 	-- 调用打包器，将返回打包好的请求
 	-- name是协议名
